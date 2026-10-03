@@ -244,9 +244,9 @@ func TestBuildStdinAnswersBuildSelectionWhenBuildsExist(t *testing.T) {
 		t.Fatalf("first build stdin = %q", calls[0].Stdin)
 	}
 
-	// A prior build's CMakeCache makes upstream --auto prompt; builder
-	// must answer "1".
-	cacheDir := filepath.Join(src, "build", "build")
+	// A prior build's CMakeCache at build/ root (upstream's actual
+	// layout) makes upstream --auto prompt; builder must answer "1".
+	cacheDir := filepath.Join(src, "build")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
