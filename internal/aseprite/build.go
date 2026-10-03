@@ -217,13 +217,21 @@ func (b Builder) seedUpstreamConfig(req BuildRequest) error {
 }
 
 // buildStdinFor composes the stdin answer for upstream build.sh's
-// build-selection prompt: "1" when its enumeration loop finds existing
-// builds (build.sh lists <builds_dir/*/CMakeCache.txt) and its first
-// numbered menu entry is the user-mode build directory. Nothing is sent
-// when no prior build exists (first build never prompts).
+// build-selection prompt: "1" when its enumeration loop would list the
+// user-mode build. Upstream enumerates "$builds_dir"/*/CMakeCache.txt"
+// with builds_dir=source, matching build/CMakeCache.txt (the user-mode
+// in-source build) plus any nested build/*/CMakeCache.txt artifacts;
+// either shape means the menu will prompt, and entry 1 is our build.
 func buildStdinFor(sourceDir string, _ Contract) []byte {
-	matches, err := filepath.Glob(filepath.Join(sourceDir, "build", "**", "CMakeCache.txt"))
-	if err != nil || len(matches) == 0 {
+	direct, err := filepath.Glob(filepath.Join(sourceDir, "build", "CMakeCache.txt"))
+	if err != nil {
+		return nil
+	}
+	nested, err := filepath.Glob(filepath.Join(sourceDir, "build", "*", "CMakeCache.txt"))
+	if err != nil {
+		return nil
+	}
+	if len(direct) == 0 && len(nested) == 0 {
 		return nil
 	}
 	return []byte("1\n")
