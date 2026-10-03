@@ -33,6 +33,10 @@ const minFreeDiskBytes = 10 << 30
 
 // markerName is the ownership marker installed inside every
 // builder-created bundle. Uninstall refuses to touch bundles without it.
+//
+// It lives in Contents/Resources/ (data, not code): a dotfile at
+// Contents/ root would be treated as unsigned nested code by codesign
+// and break the bundle's ad-hoc signature entirely.
 const markerName = ".aseprite-builder-managed"
 
 // appBundleName is the name of the macOS application bundle Aseprite's
@@ -412,8 +416,13 @@ func (p Platform) codesign(ctx context.Context, app string) error {
 		Args: []string{"--force", "--sign", "-", app},
 	})
 	if err != nil {
-		// codesign not found on PATH: the linker already ad-hoc signed
-		// the executable; continue and rely on verification.
+		// codesign missing from PATH is tolerated (the linker already
+		// ad-hoc signs the executable); a codesign FAILURE is a real
+		// problem and must abort the install.
+		var exitErr runner.ErrExit
+		if errors.As(err, &exitErr) {
+			return fmt.Errorf("codesign failed (exit %d): %s", exitErr.ExitCode, exitErr.Stderr)
+		}
 		return nil //nolint:nilerr // absence of codesign is tolerated by design
 	}
 	if !res.OK() {
@@ -424,6 +433,10 @@ func (p Platform) codesign(ctx context.Context, app string) error {
 
 // verifyStaged runs the staged executable with --version, requiring a
 // clean exit and a version match before anything is activated.
+//
+// HOME is redirected to a throwaway directory so any first-run Aseprite
+// writes land in the sandbox instead of the user's real
+// Application Support during verification.
 func (p Platform) verifyStaged(ctx context.Context, app, wantVersion string) error {
 	executable, err := bundleExecutable(app)
 	if err != nil {
@@ -432,10 +445,16 @@ func (p Platform) verifyStaged(ctx context.Context, app, wantVersion string) err
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
+	sandbox, err := os.MkdirTemp("", "aseprite-builder-verify-")
+	if err != nil {
+		return fmt.Errorf("create verification sandbox: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(sandbox) }()
+
 	res, err := p.Runner.Run(ctx, runner.Command{
 		Name: executable,
 		Args: []string{"--version"},
-		Env:  []string{"ASEPRITE_USER_DATA=" + appDataSandbox(app)},
+		Env:  []string{"HOME=" + sandbox},
 	})
 	if err != nil {
 		return fmt.Errorf("run --version: %w", err)
@@ -448,12 +467,6 @@ func (p Platform) verifyStaged(ctx context.Context, app, wantVersion string) err
 		return fmt.Errorf("version check: got %q, want a string containing %q", stdout, wantVersion)
 	}
 	return nil
-}
-
-// appDataSandbox returns a user data dir inside the staged bundle so
-// verification never writes to the user's real Aseprite preferences.
-func appDataSandbox(app string) string {
-	return filepath.Join(app, "Contents", ".aseprite-builder-verify")
 }
 
 // bundleExecutable resolves the Mach-O executable inside a bundle.
@@ -469,17 +482,23 @@ func bundleExecutable(app string) (string, error) {
 	return p, nil
 }
 
+// markerPath is where the ownership marker lives inside a bundle:
+// Contents/Resources (sealed as a resource, not treated as code).
+func markerPath(app string) string {
+	return filepath.Join(app, "Contents", "Resources", markerName)
+}
+
 func writeMarker(app string, m marker) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(app, "Contents", markerName), data, 0o644)
+	return os.WriteFile(markerPath(app), data, 0o644)
 }
 
 func readMarker(app string) (marker, error) {
 	var m marker
-	data, err := os.ReadFile(filepath.Join(app, "Contents", markerName)) //nolint:gosec // path from trusted app logic
+	data, err := os.ReadFile(markerPath(app)) //nolint:gosec // path from trusted app logic
 	if err != nil {
 		return m, err
 	}

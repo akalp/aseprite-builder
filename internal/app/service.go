@@ -513,12 +513,33 @@ func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, sin
 		return provisionResult{}, UnknownContractError{Reason: err}
 	}
 	log.Line("build contract: %s", contract.ContractFingerprint())
+	s.noteVerification(rel, log)
 
 	return provisionResult{
 		SourceDir: sourceDir,
 		Contract:  contract,
 		Reused:    reused,
 	}, nil
+}
+
+// noteVerification records when a source archive is downloaded without
+// an authoritative digest (e.g. rate-limit fallback), so the install
+// log always states the verification level honestly.
+func (s *Service) noteVerification(rel aseprite.Release, log *logging.Logger) {
+	if rel.SHA256 == "" {
+		log.Line("note: source downloaded without an authoritative digest (upstream metadata did not provide one); " +
+			"integrity is still enforced by contract inspection before building")
+	} else {
+		log.Line("source digest verified: sha256:%s", shortestDigest(rel.SHA256))
+	}
+}
+
+// shortestDigest keeps logs readable.
+func shortestDigest(s string) string {
+	if len(s) > 12 {
+		return s[:12] + "…"
+	}
+	return s
 }
 
 // wantsAppBundle reports whether the platform produces a .app bundle

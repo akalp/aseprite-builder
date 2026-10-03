@@ -5,7 +5,9 @@ package darwin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -161,8 +163,8 @@ func TestInstallFresh(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "Contents", "MacOS", "aseprite")); err != nil {
 		t.Errorf("installed executable missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(target, "Contents", markerName)); err != nil {
-		t.Errorf("ownership marker missing: %v", err)
+	if _, err := os.Stat(filepath.Join(target, "Contents", "Resources", markerName)); err != nil {
+		t.Errorf("ownership marker missing from Resources: %v", err)
 	}
 	// Staging must be cleaned up.
 	staging := filepath.Join(p.InstallRoot, retentionDirName, "staging")
@@ -331,6 +333,74 @@ func TestLaunchMissing(t *testing.T) {
 	p := newTestPlatform(t, &runner.FakeRunner{})
 	if err := p.Launch(context.Background()); err == nil {
 		t.Error("launching a missing app should fail")
+	}
+}
+
+// TestInstallCodesignFailureAborts: a codesign FAILURE (exec ran, exited
+// nonzero) must abort the install — not be conflated with "codesign is
+// not installed", which is the tolerated case. Regression for the
+// silent-skipping that left the installed bundle unsignable.
+func TestInstallCodesignFailureAborts(t *testing.T) {
+	dir := t.TempDir()
+	f := fakeVersionRunner("1.3.18.6")
+	p := newTestPlatform(t, f)
+	built := fakeApp(t, dir, "1.3.18.6")
+
+	// Inject a real codesign failure (exec ran and exited 1).
+	f.ErrMatch = func(c runner.Command) (error, bool) {
+		if c.Name == "codesign" {
+			return runner.ErrExit{
+				ExitCode: 1,
+				Cmd:      c.String(),
+				Stderr:   "code object is not signed at all\nIn subcomponent ...\n",
+			}, true
+		}
+		return nil, false
+	}
+	// And answer the staged executable's --version via versionFaker.
+
+	out := platform.BuildOutput{Version: "1.3.18.6", AppPath: built}
+	_, err := p.Install(context.Background(), out)
+	if err == nil {
+		t.Fatal("codesign failure must abort install")
+	}
+	if !strings.Contains(err.Error(), "sign staged application") {
+		t.Errorf("err = %v, want codesign failure surfaced", err)
+	}
+	// Nothing was activated.
+	if got, _ := p.InstalledVersion(context.Background()); got != "" {
+		t.Errorf("InstalledVersion = %q, want no activation", got)
+	}
+	if got, _ := p.InstalledVersion(context.Background()); got != "" {
+		t.Errorf("marker must not be activated: %q", got)
+	}
+}
+
+// TestInstallCodesignMissingIsTolerated: when codesign is absent
+// entirely, installation continues and relies on the linker's ad-hoc
+// signature + verification.
+func TestInstallCodesignMissingIsTolerated(t *testing.T) {
+	dir := t.TempDir()
+	f := fakeVersionRunner("1.3.18.6")
+	p := newTestPlatform(t, f)
+	p.InstallRoot = filepath.Join(dir, "Applications")
+	built := fakeApp(t, dir, "1.3.18.6")
+
+	// Make the codesign call fail at exec level (executable not found):
+	// FakeRunner surfaces it as an error whose unsatisfiable
+	// classification (not ErrExit) is treated as "tool absent".
+	stagedKey := fmt.Sprintf("codesign --force --sign - %s",
+		filepath.Join(p.InstallRoot, retentionDirName, "staging", appBundleName))
+	f.Errs = map[string]error{stagedKey: fmt.Errorf("exec: %w", exec.ErrNotFound)}
+
+	out := platform.BuildOutput{Version: "1.3.18.6", AppPath: built}
+	_, err := p.Install(context.Background(), out)
+	if err != nil {
+		t.Fatalf("missing codesign must be tolerated: %v", err)
+	}
+	got, _ := p.InstalledVersion(context.Background())
+	if got != "1.3.18.6" {
+		t.Errorf("InstalledVersion = %q", got)
 	}
 }
 

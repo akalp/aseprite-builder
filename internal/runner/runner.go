@@ -166,6 +166,10 @@ type FakeRunner struct {
 	Results map[string]Result
 	// Errs maps cmd.String() to an error to return in place of Result.
 	Errs map[string]error
+	// ErrMatch, when non-nil, is consulted before Results/Match and may
+	// return an error to surface for this command (pattern-based error
+	// injection).
+	ErrMatch func(cmd Command) (error, bool)
 	// Match, when non-nil, is consulted after the exact-key lookups and
 	// may return a result for pattern-based matching (e.g. any
 	// `--version` invocation regardless of path).
@@ -181,6 +185,11 @@ func (f *FakeRunner) Run(_ context.Context, cmd Command) (Result, error) {
 	f.Calls = append(f.Calls, cmd)
 	if err, ok := f.Errs[cmd.String()]; ok {
 		return f.Default, err
+	}
+	if f.ErrMatch != nil {
+		if err, ok := f.ErrMatch(cmd); ok {
+			return f.Default, err
+		}
 	}
 	if res, ok := f.Results[cmd.String()]; ok {
 		return res, nil

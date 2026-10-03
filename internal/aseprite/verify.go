@@ -60,12 +60,18 @@ func verifyExecVersion(ctx context.Context, r runner.Runner, executable, wantVer
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
+	// HOME is redirected to a throwaway dir so any first-run writes go
+	// to a sandbox instead of the user's real Application Support.
+	sandbox, err := os.MkdirTemp("", "aseprite-builder-verify-")
+	if err != nil {
+		return fmt.Errorf("create verification sandbox: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(sandbox) }()
+
 	res, err := r.Run(ctx, runner.Command{
 		Name: executable,
 		Args: []string{"--version"},
-		// Sandbox writes inside a throwaway dir so verification never
-		// touches the user's real Aseprite preferences.
-		Env: []string{"ASEPRITE_USER_DATA=" + filepath.Join(os.TempDir(), "aseprite-builder-verify-sandbox")},
+		Env:  []string{"HOME=" + sandbox},
 	})
 	if err != nil {
 		return fmt.Errorf("verify: running %s --version: %w", filepath.Base(executable), err)

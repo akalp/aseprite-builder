@@ -3,8 +3,12 @@ package aseprite
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
 	"github.com/aseprite-builder/aseprite-builder/internal/version"
@@ -38,11 +42,21 @@ func ParseChannel(s string) (Channel, error) {
 
 // GithubReleaseProvider implements ReleaseProvider over the public
 // GitHub API without requiring Git or authentication.
+//
+// When the API's anonymous rate limit is exhausted, Resolve falls back
+// to the plain (non-API) releases/latest redirect: the final URL
+// carries the latest stable tag and the source archive name is derived
+// from the tag exactly like the API-driven path. No digest is available
+// in that mode, which is logged and reflected in the install state.
 type GithubReleaseProvider struct {
 	// Client is the upstream metadata client. A default is used if nil.
 	Client *upstream.Client
 	// PageSize limits how many releases are examined (100 max).
 	PageSize int
+	// Log receives decision notes (rate-limit fallback); nil disables.
+	Log func(format string, args ...any)
+	// ReleasesBaseURL overrides github.com for tests of the redirect fallback.
+	ReleasesBaseURL string
 }
 
 // NewGithubReleaseProvider returns a provider backed by the default
@@ -91,15 +105,103 @@ func (p GithubReleaseProvider) List(ctx context.Context, channel Channel) ([]Rel
 }
 
 // Resolve picks the latest stable release carrying a source archive.
+// On API rate-limit errors it transparently falls back to the plain
+// releases/latest redirect (no API quota consumed), trading off the
+// asset digest, and reports the degradation through Log. Empty API
+// responses do NOT degrade: they signal an upstream contract anomaly
+// that must surface as an error.
 func (p GithubReleaseProvider) Resolve(ctx context.Context, channel Channel) (Release, error) {
 	releases, err := p.List(ctx, channel)
 	if err != nil {
+		if isRateLimitError(err) {
+			return p.fallbackOrError(ctx, channel, err)
+		}
 		return Release{}, err
 	}
 	if len(releases) == 0 {
 		return Release{}, fmt.Errorf("no matching Aseprite releases found for channel %q", channel)
 	}
 	return releases[0], nil
+}
+
+func (p GithubReleaseProvider) fallbackOrError(ctx context.Context, channel Channel, cause error) (Release, error) {
+	if channel != ChannelStable {
+		return Release{}, cause
+	}
+	rel, err := p.resolveViaLatestRedirect(ctx)
+	if err != nil {
+		return Release{}, fmt.Errorf("%w; also could not resolve the latest release via the releases/latest redirect: %w", cause, err)
+	}
+	if p.Log != nil {
+		p.Log("GitHub API rate-limited; resolved latest stable release %s via the releases/latest redirect (no digest available for verification)", rel.TagName)
+	}
+	return rel, nil
+}
+
+// isRateLimitError recognizes GitHub's anonymous rate-limit responses.
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "rate limit") || strings.Contains(msg, "rate-limited")
+}
+
+// latestRedirectUA identifies the builder on the plain (non-API)
+// releases/latest redirect request.
+const latestRedirectUA = "aseprite-builder/0.1"
+
+// resolveViaLatestRedirect resolves the latest stable release from the
+// plain releases/latest page redirect — outside the GitHub API and its
+// rate limit. The final URL is
+//
+//	https://github.com/aseprite/aseprite/releases/tag/<tag>
+//
+// and the source asset name is derived from the tag by the same rule
+// the API path uses (SourceAssetName). No digest is available here;
+// verification degrades and is recorded accordingly.
+func (p GithubReleaseProvider) resolveViaLatestRedirect(ctx context.Context) (Release, error) {
+	base := p.ReleasesBaseURL
+	if base == "" {
+		base = "https://github.com"
+	}
+	url := strings.TrimRight(base, "/") + "/aseprite/aseprite/releases/latest"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return Release{}, fmt.Errorf("build latest-release request: %w", err)
+	}
+	req.Header.Set("User-Agent", latestRedirectUA)
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Release{}, fmt.Errorf("follow latest-release redirect: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// Drain a bounded body so the connection is reusable.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+
+	if resp.StatusCode != http.StatusOK {
+		return Release{}, fmt.Errorf("latest-release redirect ended with HTTP %d", resp.StatusCode)
+	}
+	final := resp.Request.URL.Path
+	tag := path.Base(final)
+	if path.Base(path.Dir(final)) != "tag" {
+		return Release{}, fmt.Errorf("latest-release redirect did not end in a tag URL (%s)", final)
+	}
+	v, err := ParseVersion(tag)
+	if err != nil {
+		// The latest stable tag is not a stable version this builder
+		// understands — fail safely instead of guessing.
+		return Release{}, fmt.Errorf("latest release tag %q is not a recognized stable version", tag)
+	}
+	return Release{
+		Version: v,
+		TagName: tag,
+		SourceURL: fmt.Sprintf("%s/aseprite/aseprite/releases/download/%s/Aseprite-v%s-Source.zip",
+			strings.TrimRight(base, "/"), tag, strings.TrimPrefix(tag, "v")),
+	}, nil
 }
 
 // convert turns an upstream release into a Release, skipping releases
