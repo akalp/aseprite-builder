@@ -404,6 +404,35 @@ func TestInstallCodesignMissingIsTolerated(t *testing.T) {
 	}
 }
 
+// TestOwnerMarkerLegacyLocationAccepted: bundles installed before the
+// signing fix carry the marker at Contents/ — still counted as owned so
+// a transactional replace works without --force.
+func TestOwnerMarkerLegacyLocationAccepted(t *testing.T) {
+	dir := t.TempDir()
+	p := newTestPlatform(t, &runner.FakeRunner{})
+	p.InstallRoot = filepath.Join(dir, "Applications")
+
+	// Forge a legacy-state install: target with old marker placement.
+	target := p.DefaultInstallPath()
+	if err := os.MkdirAll(filepath.Join(target, "Contents", "MacOS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "Contents", markerName), []byte(`{"aseprite_version":"1.3.18.5","builder_version":"test","installed_at":"2026-01-01T00:00:00Z"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := readMarker(target)
+	if err != nil {
+		t.Fatalf("readMarker legacy: %v", err)
+	}
+	if m.Version != "1.3.18.5" {
+		t.Errorf("Version = %q", m.Version)
+	}
+	if got, _ := p.InstalledVersion(context.Background()); got != "1.3.18.5" {
+		t.Errorf("InstalledVersion = %q, want the legacy install recognized", got)
+	}
+}
+
 func TestLaunchInvokesOpen(t *testing.T) {
 	dir := t.TempDir()
 	f := fakeVersionRunner("1.3.18.6")

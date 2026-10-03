@@ -496,9 +496,16 @@ func writeMarker(app string, m marker) error {
 	return os.WriteFile(markerPath(app), data, 0o644)
 }
 
+// readMarker reads the ownership marker, accepting both the current
+// location (Contents/Resources) and the legacy initial location
+// (Contents/) so installs made before the signing fix can still be
+// proven owned and replaced transactionally.
 func readMarker(app string) (marker, error) {
 	var m marker
 	data, err := os.ReadFile(markerPath(app)) //nolint:gosec // path from trusted app logic
+	if err != nil {
+		data, err = os.ReadFile(filepath.Join(app, "Contents", markerName)) //nolint:gosec // legacy path, trusted app logic
+	}
 	if err != nil {
 		return m, err
 	}
