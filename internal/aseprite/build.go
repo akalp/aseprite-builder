@@ -273,13 +273,36 @@ func (e *ContractViolationError) Error() string {
 }
 
 // ensureSymlink points link at target, creating or updating as needed.
+// A non-symlink occupant at link (leftover directory or file) is
+// reported explicitly rather than failing with a cryptic "file exists".
 func ensureSymlink(link, target string) error {
-	existing, err := os.Readlink(link)
-	if err == nil && existing == target {
-		return nil // already correct
+	if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		existing, readErr := os.Readlink(link)
+		if readErr == nil && existing == target {
+			return nil // already correct
+		}
+		// Different target: replace it.
+	} else if err == nil {
+		return fmt.Errorf(
+			"cannot create symlink %s: a non-symlink %s occupies the path",
+			link, kindOf(info))
 	}
-	_ = os.Remove(link)
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot replace symlink %s: %w", link, err)
+	}
 	return os.Symlink(target, link)
+}
+
+// kindOf renders a filesystem entry's kind for diagnostics.
+func kindOf(info os.FileInfo) string {
+	switch {
+	case info.IsDir():
+		return "directory"
+	case info.Mode()&os.ModeSymlink != 0:
+		return "symlink"
+	default:
+		return "file"
+	}
 }
 
 // tail returns the last n lines of s for error reporting.

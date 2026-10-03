@@ -390,6 +390,140 @@ func TestUpdateInstallsNewerVersion(t *testing.T) {
 	}
 }
 
+// TestInstallReusesExtractedSourceStillInspectsContract reproduces the
+// rebuild failure: the source tree already exists (like after a first
+// install), so provisioning takes the reuse path — but it must still
+// run the contract inspection and derive SkiaDirName, otherwise build
+// seeding breaks.
+func TestInstallReusesExtractedSourceStillInspectsContract(t *testing.T) {
+	layout := mustLayout(t)
+	plat := &fakePlatform{}
+	rSrc := &runner.FakeRunner{}
+
+	// Materialize a source tree the way the first install would have.
+	// (The fake build then produces output inside it as usual.)
+	svc, err := New(Options{
+		BuilderVersion:      "test",
+		Layout:              layout,
+		Platform:            plat,
+		BuildRunnerOverride: rSrc,
+		Releases: fakeReleases{releases: []aseprite.Release{{
+			Version: mustVer("1.3.18.6"), TagName: "v1.3.18.6", SourceURL: "https://x/src.zip",
+		}}},
+		Runner: rSrc,
+		Store:  state.Store{Dir: layout.State},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := layout.SourceTreeDir("1.3.18.6")
+	writeSourceFixture(t, sourceDir) // full contract-compliant tree, no download
+
+	wireBuildFakeForSource(t, rSrc, "1.3.18.6")
+	result, err := svc.Install(context.Background(), InstallOptions{ForceOverwriteUnowned: true}, nil)
+	if err != nil {
+		t.Fatalf("Install on reused source: %v", err)
+	}
+	if result.SkiaTag != "m124-08a5439a6b" {
+		t.Errorf("SkiaTag = %q (contract must be inspected on reuse)", result.SkiaTag)
+	}
+	// The Skia symlink must exist at the exact path upstream expects.
+	if _, err := os.Readlink(filepath.Join(sourceDir, ".deps", "skia-m124")); err != nil {
+		t.Errorf("skia symlink missing: %v", err)
+	}
+}
+
+// TestInstallReusedCorruptSourceFailsSafely: a reused tree missing part
+// of the upstream contract (simulates drift/accidental tampering) must
+// fail inspection even when present from an earlier build.
+func TestInstallReusedCorruptSourceFailsSafely(t *testing.T) {
+	layout := mustLayout(t)
+	plat := &fakePlatform{}
+	rSrc := &runner.FakeRunner{}
+
+	svc, err := New(Options{
+		BuilderVersion:      "test",
+		Layout:              layout,
+		Platform:            plat,
+		BuildRunnerOverride: rSrc,
+		Releases: fakeReleases{releases: []aseprite.Release{{
+			Version: mustVer("1.3.18.6"), TagName: "v1.3.18.6", SourceURL: "https://x/src.zip",
+		}}},
+		Runner: rSrc,
+		Store:  state.Store{Dir: layout.State},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := layout.SourceTreeDir("1.3.18.6")
+	writeSourceFixture(t, sourceDir)
+	// Corrupt: remove a contract-critical file.
+	if err := os.Remove(filepath.Join(sourceDir, "laf", "misc", "skia-url.sh")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.Install(context.Background(), InstallOptions{}, nil)
+	if !errors.Is(err, ErrUnknownContract) {
+		t.Fatalf("err = %v, want unknown-contract on reused corrupt source", err)
+	}
+}
+
+// writeSourceFixture writes a contract-compliant source tree (same
+// shape as fixtureSourceZip) directly into dir.
+func writeSourceFixture(t *testing.T, dir string) {
+	t.Helper()
+	files := map[string]string{
+		"EULA.txt":                "license",
+		".gitmodules":             "[submodule \"laf\"]",
+		"build.sh":                "#!/usr/bin/env bash\necho build",
+		"CMakeLists.txt":          "cmake_minimum_required(VERSION 3.20)\nproject(aseprite C CXX)\n",
+		"laf/CMakeLists.txt":      "# laf",
+		"laf/clip/CMakeLists.txt": "# clip",
+		"laf/misc/platform.sh":    "platform",
+		"laf/misc/skia-tag.txt":   "m124-08a5439a6b\n",
+		"laf/misc/skia-url.sh":    "url",
+		"src/main/osx/Info.plist": "<plist/>",
+		"src/CMakeLists.txt":      "${CMAKE_BINARY_DIR}/bin/Aseprite.app/Contents/Resources/data\n",
+	}
+	for name, content := range files {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// wireBuildFakeForSource emulates the upstream build for any source dir.
+func wireBuildFakeForSource(t *testing.T, fk *runner.FakeRunner, version string) {
+	t.Helper()
+	fk.Match = func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "bash" && len(c.Args) == 3 && strings.HasSuffix(c.Args[0], "build.sh") {
+			srcDir := filepath.Dir(c.Args[0])
+			if err := materializeBuildOutput(t, srcDir, version); err != nil {
+				return runner.Result{}, false
+			}
+			return runner.Result{ExitCode: 0}, true
+		}
+		if len(c.Args) == 1 && c.Args[0] == "--version" {
+			switch {
+			case filepath.Base(c.Name) == "cmake":
+				return runner.Result{Stdout: "cmake version 3.31.6\n"}, true
+			case filepath.Base(c.Name) == "ninja":
+				return runner.Result{Stdout: "1.13.1\n"}, true
+			case strings.HasSuffix(c.Name, "aseprite"):
+				return runner.Result{Stdout: "Aseprite v" + version + "\n"}, true
+			}
+		}
+		if c.Name == "bash" && len(c.Args) == 4 && strings.HasSuffix(c.Args[0], "skia-url.sh") {
+			return runner.Result{Stdout: "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-arm64.zip\n"}, true
+		}
+		return runner.Result{}, false
+	}
+}
+
 func TestLaunchAndUninstallLifecycle(t *testing.T) {
 	svc, plat, fk, sourcesDir := newTestService(t)
 	wireBuildFake(t, fk, sourcesDir, "1.3.18.6")

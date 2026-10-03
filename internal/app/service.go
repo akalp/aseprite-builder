@@ -473,60 +473,52 @@ func (f downloaderFetcher) Fetch(ctx context.Context, src, dst, sha string, prog
 // provisionSource downloads (unless cached) and extracts the official
 // source, then inspects the upstream build contract. Failure at this
 // stage is always safe: nothing has been installed.
+//
+// Inspection runs on EVERY provision, including reused trees: the
+// upstream contract may have changed since the last build, and the
+// build orchestration needs contract facts (Skia naming, CMake
+// minimum) even when the tree is cached.
 func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, sink ProgressSink, log *logging.Logger) (provisionResult, error) {
 	sink.emit(ProgressEvent{Stage: StageFetchSource, Message: "Downloading official source archive"})
 
 	sourceDir := s.opts.Layout.SourceTreeDir(rel.Version.String())
-	if provisioned := s.validProvisionedSource(sourceDir); provisioned != nil {
-		log.Line("source for %s already extracted at %s (reused)", rel.Version, sourceDir)
-		return *provisioned, nil
-	}
-
-	if err := os.MkdirAll(s.opts.Layout.Downloads, 0o755); err != nil {
-		return provisionResult{}, err
-	}
-	archivePath := s.opts.Layout.DownloadFile("aseprite", rel.SourceAssetName())
-	fetch := s.defaultFetcher()
-	if err := fetch.Fetch(ctx, rel.SourceURL, archivePath, rel.SHA256, nil); err != nil {
-		return provisionResult{}, fmt.Errorf("download Aseprite source: %w", err)
-	}
-
-	if err := os.RemoveAll(sourceDir); err != nil {
-		return provisionResult{}, fmt.Errorf("prepare source dir: %w", err)
-	}
-	if err := extractSourceArchive(archivePath, sourceDir); err != nil {
-		return provisionResult{}, err
-	}
-	if err := os.Remove(archivePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		log.Line("note: could not remove source archive: %v", err)
-	}
-
-	provisioned := s.validProvisionedSource(sourceDir)
-	if provisioned == nil {
-		return provisionResult{}, UnknownContractError{
-			Reason: fmt.Errorf("extracted source at %s does not look like an official Aseprite source archive", sourceDir),
+	reused := true
+	if _, statErr := os.Stat(filepath.Join(sourceDir, "CMakeLists.txt")); statErr != nil {
+		reused = false
+		if err := os.MkdirAll(s.opts.Layout.Downloads, 0o755); err != nil {
+			return provisionResult{}, err
 		}
+		archivePath := s.opts.Layout.DownloadFile("aseprite", rel.SourceAssetName())
+		fetch := s.defaultFetcher()
+		if err := fetch.Fetch(ctx, rel.SourceURL, archivePath, rel.SHA256, nil); err != nil {
+			return provisionResult{}, fmt.Errorf("download Aseprite source: %w", err)
+		}
+		if err := os.RemoveAll(sourceDir); err != nil {
+			return provisionResult{}, fmt.Errorf("prepare source dir: %w", err)
+		}
+		if err := extractSourceArchive(archivePath, sourceDir); err != nil {
+			return provisionResult{}, err
+		}
+		if err := os.Remove(archivePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			log.Line("note: could not remove source archive: %v", err)
+		}
+	} else {
+		log.Line("source for %s already extracted at %s (reused)", rel.Version, sourceDir)
 	}
 
 	sink.emit(ProgressEvent{Stage: StageInspectContract, Message: "Inspecting upstream build contract"})
 	inspector := aseprite.NewInspector()
-	contract, err := inspector.Inspect(provisioned.SourceDir, s.wantsAppBundle())
+	contract, err := inspector.Inspect(sourceDir, s.wantsAppBundle())
 	if err != nil {
-		return *provisioned, UnknownContractError{Reason: err}
+		return provisionResult{}, UnknownContractError{Reason: err}
 	}
 	log.Line("build contract: %s", contract.ContractFingerprint())
-	provisioned.Contract = contract
-	return *provisioned, nil
-}
 
-// validProvisionedSource double-checks an extracted source tree: the
-// structural markers the contract inspector requires are validated via
-// a full inspection (cheap, file presence only) before reuse.
-func (s *Service) validProvisionedSource(sourceDir string) *provisionResult {
-	if _, statErr := os.Stat(filepath.Join(sourceDir, "CMakeLists.txt")); statErr != nil {
-		return nil
-	}
-	return &provisionResult{SourceDir: sourceDir, Reused: true}
+	return provisionResult{
+		SourceDir: sourceDir,
+		Contract:  contract,
+		Reused:    reused,
+	}, nil
 }
 
 // wantsAppBundle reports whether the platform produces a .app bundle
