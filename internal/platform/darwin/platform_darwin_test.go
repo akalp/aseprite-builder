@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // fakeApp creates a minimal stand-in for the Aseprite.app bundle

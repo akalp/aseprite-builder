@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // SkiaPlatform is the platform descriptor upstream Skia packaging

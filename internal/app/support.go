@@ -3,9 +3,9 @@ package app
 import (
 	"context"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/aseprite"
-	"github.com/aseprite-builder/aseprite-builder/internal/logging"
-	"github.com/aseprite-builder/aseprite-builder/internal/state"
+	"github.com/akalp/aseprite-builder/internal/aseprite"
+	"github.com/akalp/aseprite-builder/internal/logging"
+	"github.com/akalp/aseprite-builder/internal/state"
 )
 
 // stateChannelOrDefault normalizes a persisted channel string back to

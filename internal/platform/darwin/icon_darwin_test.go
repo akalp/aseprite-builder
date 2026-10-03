@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // fixtureIconsDir creates the upstream data/icons layout with the

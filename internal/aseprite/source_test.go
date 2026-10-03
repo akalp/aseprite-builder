@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
+	"github.com/akalp/aseprite-builder/internal/upstream"
 )
 
 // fakeGitHub serves the upstream client's releases endpoints.

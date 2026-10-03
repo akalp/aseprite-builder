@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/archive"
-	"github.com/aseprite-builder/aseprite-builder/internal/download"
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/archive"
+	"github.com/akalp/aseprite-builder/internal/download"
+	"github.com/akalp/aseprite-builder/internal/platform"
 )
 
 // newDownloader builds the standard verified, retrying downloader.

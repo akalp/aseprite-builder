@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // contractLevel identifies the shape of the upstream build contract

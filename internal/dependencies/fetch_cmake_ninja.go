@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/archive"
-	"github.com/aseprite-builder/aseprite-builder/internal/download"
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/archive"
+	"github.com/akalp/aseprite-builder/internal/download"
+	"github.com/akalp/aseprite-builder/internal/paths"
+	"github.com/akalp/aseprite-builder/internal/upstream"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // cmakeRepo is CMake's authoritative release repository. Kitware

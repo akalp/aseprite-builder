@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // buildScriptKey matches the bash build.sh invocation in the fake runner.

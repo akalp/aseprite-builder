@@ -1,10 +1,13 @@
 # AGENTS.md
 
-Go 1.24 CLI (module `github.com/aseprite-builder/aseprite-builder`) that builds,
-installs, updates and removes Aseprite from official source. Stdlib only —
-no go.sum, no third-party deps. First vertical slice is macOS arm64/amd64 only
-(other platforms fail fast in `internal/cli`). Docs: `docs/PROJECT_SPEC.md` (the
-spec — treat as binding), `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`.
+Go 1.24 CLI (module `github.com/akalp/aseprite-builder`) that builds,
+installs, updates and removes Aseprite from official source. Business and data
+layers are stdlib-only; UI dependencies (Bubble Tea / Lip Gloss) are allowed
+**only** inside `internal/tui` (spec §10, §36 — go.mod/go.sum are tracked
+normally). First vertical slice is macOS arm64/amd64 only (other platforms fail
+fast in `internal/cli`); running with no arguments opens the TUI. Docs:
+`docs/PROJECT_SPEC.md` (the spec — treat as binding), `docs/ARCHITECTURE.md`,
+`docs/DEVELOPMENT.md`.
 
 ## Commands
 
@@ -30,8 +33,12 @@ spec — treat as binding), `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`.
 - **No `runtime.GOOS` outside the platform layer** — allowed only in
   `internal/platformselector`, `internal/paths`, and `internal/platform`.
 - **`internal/cli` never contains business logic** — only flags, output, and
-  typed-error mapping. Business services live in `internal/app`.
-- Dependency direction: `cmd → internal/cli → internal/app →
+  typed-error mapping. Business services live in `internal/app`; user-facing
+  message mapping lives in `app.FriendlyMessage` so CLI and TUI cannot drift.
+- **UI dependencies live only in `internal/tui`.** No package outside
+  `internal/tui` may import Bubble Tea / Lip Gloss (guarded by a test in
+  `internal/archtest`); `internal/app` must gain zero UI imports.
+- Dependency direction: `cmd → internal/{cli,tui} → internal/app →
   internal/{aseprite,platform} → infra (runner, download, archive, upstream,
   paths, state)`.
 

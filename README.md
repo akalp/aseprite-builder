@@ -12,9 +12,14 @@ directories.
 
 ## Current status
 
-The project is at the first vertical slice:
+The project is at the first vertical slice plus its interactive UI:
 
-- **macOS Apple Silicon + Intel** (arm64/amd64), CLI only.
+- **macOS Apple Silicon + Intel** (arm64/amd64), CLI **and TUI**.
+- **Running `aseprite-builder` with no arguments opens the interactive
+  TUI** (install / launch / update / repair / rebuild / diagnostics /
+  settings / uninstall — same services as the CLI, structured progress,
+  license notice on first run). The non-interactive CLI remains for
+  advanced users and automation.
 - Stable-channel Aseprite resolution from official GitHub release
   metadata (no Git required).
 - Runtime-resolved dependencies: system CMake/Ninja are reused when
@@ -25,8 +30,8 @@ The project is at the first vertical slice:
   touches an existing working installation; the previous version is
   retained for one generation.
 
-Windows and Linux support and the interactive TUI are planned
-milestones (see `docs/PROJECT_SPEC.md`).
+Windows and Linux support are the next milestones (see
+`docs/PROJECT_SPEC.md` §42 and `docs/plans/`).
 
 ## Quick start (macOS)
 
@@ -34,13 +39,12 @@ milestones (see `docs/PROJECT_SPEC.md`).
 # Build it
 go build -o aseprite-builder ./cmd/aseprite-builder
 
-# Diagnose your machine
+# Open the interactive UI (install / update / repair / doctor / …)
+./aseprite-builder
+
+# …or use the non-interactive CLI
 ./aseprite-builder doctor
-
-# Install the latest stable Aseprite (compiles locally)
 ./aseprite-builder install
-
-# Launch / update / remove
 ./aseprite-builder launch
 ./aseprite-builder update
 ./aseprite-builder uninstall

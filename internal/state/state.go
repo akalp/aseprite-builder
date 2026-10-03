@@ -53,6 +53,9 @@ type Config struct {
 	KeepWorkspace bool `json:"keep_workspace"`
 	// Verbose enables chatty logging on stderr.
 	Verbose bool `json:"verbose"`
+	// NoticeAcknowledged records that the user dismissed the §7
+	// licensing notice, so the TUI welcome screen is shown once.
+	NoticeAcknowledged bool `json:"notice_acknowledged,omitempty"`
 }
 
 // DefaultConfig returns the zero-configuration defaults.

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/upstream"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // asepriteRepo is the official Aseprite GitHub repository; the only

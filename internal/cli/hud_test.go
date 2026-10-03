@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/app"
+	"github.com/akalp/aseprite-builder/internal/app"
 )
 
 func TestHUDSequenceMatchesMock(t *testing.T) {

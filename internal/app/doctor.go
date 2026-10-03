@@ -2,14 +2,16 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/dependencies"
-	"github.com/aseprite-builder/aseprite-builder/internal/logging"
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
-	"github.com/aseprite-builder/aseprite-builder/internal/state"
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/dependencies"
+	"github.com/akalp/aseprite-builder/internal/logging"
+	"github.com/akalp/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/state"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // DoctorReport is the full diagnostics payload; the JSON produced by
@@ -147,4 +149,60 @@ func (r DoctorReport) overallStatus() string {
 		return "issues"
 	}
 	return "healthy"
+}
+
+// DoctorRow is one diagnostic check as rendered by both frontends: the
+// CLI's `doctor` output and the TUI diagnostics screen show the same
+// facts, built by the same code.
+type DoctorRow struct {
+	// OK distinguishes ✓ from ✗ rows.
+	OK bool
+	// Name is the left column (e.g. "Operating system").
+	Name string
+	// Detail is the right column (status, version, fix hint...).
+	Detail string
+}
+
+// DoctorRows builds the diagnostic rows for a report. This is the
+// single source of the doctor table; no per-frontend duplication.
+func (r DoctorReport) DoctorRows() []DoctorRow {
+	var rows []DoctorRow
+	rowOK := func(name, detail string) { rows = append(rows, DoctorRow{OK: true, Name: name, Detail: detail}) }
+	rowFail := func(name, detail string) { rows = append(rows, DoctorRow{OK: false, Name: name, Detail: detail}) }
+
+	rowOK("Operating system", fmt.Sprintf("%s %s", r.System.OS, r.System.OSVersion))
+	if r.System.Supported {
+		rowOK("Architecture", r.System.Arch)
+	} else {
+		rowFail("Architecture", r.System.Arch+" (unsupported)")
+	}
+	for _, c := range r.Requirements {
+		if c.OK {
+			rowOK(c.Name, c.Detail)
+		} else {
+			rowFail(c.Name, c.Fix)
+		}
+	}
+	for _, t := range r.Tools {
+		if t.Status == "none" || t.Status == "error" {
+			rowFail(t.Name, "unavailable and no downloadable alternative was configured")
+		} else {
+			rowOK(t.Name, t.Display())
+		}
+	}
+	if r.Skia.Status == "cached" {
+		rowOK("Skia", "cached: "+strings.Join(r.Skia.CachedTags, ", "))
+	} else {
+		rowOK("Skia", "no cached artifact (resolved during install)")
+	}
+	if r.Installation != nil && r.Installation.HealthyChecked {
+		if r.Installation.Healthy {
+			rowOK("Installation", fmt.Sprintf("Aseprite %s at %s", r.Installation.InstalledVersion, r.Installation.AppPath))
+		} else {
+			rowFail("Installation", "broken — run: aseprite-builder repair")
+		}
+	} else {
+		rowOK("Installation", "none (nothing installed yet)")
+	}
+	return rows
 }

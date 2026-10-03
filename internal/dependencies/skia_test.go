@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
+	"github.com/akalp/aseprite-builder/internal/upstream"
 )
 
 func buildSkiaZip(t *testing.T, wrapper string, cpu string) []byte {

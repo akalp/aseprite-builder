@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/app"
-	"github.com/aseprite-builder/aseprite-builder/internal/aseprite"
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
-	"github.com/aseprite-builder/aseprite-builder/internal/state"
+	"github.com/akalp/aseprite-builder/internal/app"
+	"github.com/akalp/aseprite-builder/internal/aseprite"
+	"github.com/akalp/aseprite-builder/internal/paths"
+	"github.com/akalp/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/state"
 )
 
 // cliFakePlatform implements platform.Platform for CLI tests.
@@ -224,7 +224,7 @@ func TestFriendlyMessageUnknownContract(t *testing.T) {
 	err := fmt.Errorf("wrap: %w", &app.UnknownContractError{
 		Reason: errors.New("missing build.sh"),
 	})
-	got := friendlyMessage(err)
+	got := app.FriendlyMessage(err)
 	if !strings.Contains(got, "does not recognize") {
 		t.Errorf("message = %q", got)
 	}
@@ -235,7 +235,7 @@ func TestFriendlyMessageUnknownContract(t *testing.T) {
 
 func TestFriendlyMessageUpstreamBuildError(t *testing.T) {
 	e := &aseprite.UpstreamBuildError{ExitCode: 2}
-	got := friendlyMessage(e)
+	got := app.FriendlyMessage(e)
 	if !strings.Contains(got, "could not be compiled") {
 		t.Errorf("message = %q", got)
 	}
@@ -243,7 +243,7 @@ func TestFriendlyMessageUpstreamBuildError(t *testing.T) {
 
 func TestFriendlyMessageRequirements(t *testing.T) {
 	err := app.NewSystemRequirementsErrorForTest()
-	got := friendlyMessage(err)
+	got := app.FriendlyMessage(err)
 	if !strings.Contains(got, "missing some requirements") {
 		t.Errorf("message = %q", got)
 	}

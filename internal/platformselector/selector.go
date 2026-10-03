@@ -11,7 +11,7 @@ import (
 	"errors"
 	"runtime"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/platform"
 )
 
 // ErrUnsupportedPlatform is returned for OSes the builder does not

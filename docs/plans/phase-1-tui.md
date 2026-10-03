@@ -1,6 +1,6 @@
 # Phase 1 — TUI over the existing services (Spec Milestone 3)
 
-**Status:** Planned
+**Status:** ✅ Complete
 **Spec:** §10 (Technology), §12 (Normal User Experience), §34 (TUI Architecture), §39 (Failure UX), §7 (License notice)
 **Depends on:** Milestones 1–2 ✅
 

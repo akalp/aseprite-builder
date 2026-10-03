@@ -10,7 +10,7 @@ Read [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for how the implemented
 code maps to the spec, and [`../../AGENTS.md`](../../AGENTS.md) for the
 invariants every phase must preserve.
 
-## Status snapshot (audited 2026-10-03, at `41373dc`)
+## Status snapshot (audited 2026-10-04, Phase 1 complete)
 
 `make check` passes (gofmt + go vet + go test, no network, no Aseprite
 compile in tests).
@@ -19,28 +19,28 @@ compile in tests).
 |---|---|---|
 | 1 — Platform-independent core | ✅ Complete | `internal/{paths,state,logging,runner,download,archive,upstream,version,aseprite,dependencies}`, CLI over `internal/app` services |
 | 2 — macOS arm64 vertical slice | ✅ Complete | `internal/platform/darwin` (detect / requirements / transactional install + retention rollback / launch / uninstall), contract inspection (`internal/aseprite/contract.go`), build orchestration via upstream `build.sh --auto --norun`, Skia discovery from the source tree, update / rebuild / repair / uninstall / doctor `--json`, CLI HUD, Libre-license notice |
-| 3 — TUI | ❌ Not started | no `internal/tui` |
+| 3 — TUI | ✅ Complete | `internal/tui` (Bubble Tea + Lip Gloss): welcome (§7 notice) → home (§12 mock) → systemcheck → installoptions → installing (structured progress, Ctrl+C cancels) → result; diagnostics / settings (`state.Config` now read+written) / advanced (pinned install, rebuilds, uninstall with purge scopes); §39 error screens with shared `app.FriendlyMessage`, distinct §17 unknown-contract screen; no-args TTY invocation opens it |
 | 4 — Windows x64 | ❌ Not started | only `darwin` implements `platform.Platform`; `SupportedTargets()` has `darwin` only |
 | 5 — Linux Debian/Ubuntu | ❌ Not started | no packages layer |
 | 6 — Additional Linux distros | ❌ Not started | — |
 | 7 — Hardening | ◐ Partial | rollback/retention ✅, contract validation ✅, download verification ✅ (where upstream publishes digests), cancellation ✅ (signals wired) — CI, release packaging + §38 release-safety checks, dev channel, settings/advanced surface, security review ❌ |
 
 Spec items deliberately **deferred** into the phases below:
-development channel (§14), advanced mode surface (§41 — `state.Config`
-exists but nothing reads/writes it yet), release artifacts (§3/§38),
-CI matrix (§37).
+development channel (§14 — the settings screen shows stable only
+until its backend exists), release artifacts (§3/§38), CI matrix
+(§37).
 
 ## Decisions
 
 | Decision | Resolution |
 |---|---|
-| TUI library (spec §10 prefers Bubble Tea; AGENTS.md said "stdlib only") | **Bubble Tea + Lip Gloss (+Bubbles as needed)** — user-approved 2026-10-03. AGENTS.md must be amended when Phase 1 starts: the stdlib-only rule narrows to *business layers*; UI deps live only in `internal/tui` and `go.mod`/`go.sum` are tracked normally (spec §36 already permits this). |
+| TUI library (spec §10 prefers Bubble Tea; AGENTS.md said "stdlib only") | **Bubble Tea + Lip Gloss** — user-approved 2026-10-03. AGENTS.md amended when Phase 1 started: the stdlib-only rule narrowed to *business layers*; UI deps live only in `internal/tui` and `go.mod`/`go.sum` are tracked normally (spec §36 already permits this). Bubbles was **not** taken: the only candidate need (pinned-version text entry) is hand-rolled in ~15 lines (spec rule 11). |
 
 ## Phases
 
 | # | Phase | Spec reference | File | Status |
 |---|---|---|---|---|
-| 1 | TUI over the existing services | §10, §12, §34, §39 | [`phase-1-tui.md`](phase-1-tui.md) | Planned |
+| 1 | TUI over the existing services | §10, §12, §34, §39 | [`phase-1-tui.md`](phase-1-tui.md) | ✅ Complete |
 | 2 | Windows x64 platform | §11, §21, §37 | [`phase-2-windows.md`](phase-2-windows.md) | Planned |
 | 3 | Linux — Debian/Ubuntu vertical slice | §11, §16, §22 | [`phase-3-linux-debian-ubuntu.md`](phase-3-linux-debian-ubuntu.md) | Planned |
 | 4 | Linux — additional distributions | §11, §16, §22 | [`phase-4-linux-distros.md`](phase-4-linux-distros.md) | Planned |

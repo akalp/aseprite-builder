@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/archive"
-	"github.com/aseprite-builder/aseprite-builder/internal/download"
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
+	"github.com/akalp/aseprite-builder/internal/archive"
+	"github.com/akalp/aseprite-builder/internal/download"
+	"github.com/akalp/aseprite-builder/internal/paths"
+	"github.com/akalp/aseprite-builder/internal/upstream"
 )
 
 // SkiaRepo is the official aseprite-maintained Skia fork containing

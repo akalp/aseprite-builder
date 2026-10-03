@@ -11,12 +11,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/aseprite"
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
-	"github.com/aseprite-builder/aseprite-builder/internal/state"
-	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
+	"github.com/akalp/aseprite-builder/internal/aseprite"
+	"github.com/akalp/aseprite-builder/internal/paths"
+	"github.com/akalp/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/state"
+	"github.com/akalp/aseprite-builder/internal/upstream"
 )
 
 // fakePlatform implements platform.Platform for service tests without

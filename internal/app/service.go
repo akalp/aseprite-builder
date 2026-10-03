@@ -16,16 +16,16 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/aseprite"
-	"github.com/aseprite-builder/aseprite-builder/internal/dependencies"
-	"github.com/aseprite-builder/aseprite-builder/internal/download"
-	"github.com/aseprite-builder/aseprite-builder/internal/logging"
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
-	"github.com/aseprite-builder/aseprite-builder/internal/state"
-	"github.com/aseprite-builder/aseprite-builder/internal/upstream"
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/aseprite"
+	"github.com/akalp/aseprite-builder/internal/dependencies"
+	"github.com/akalp/aseprite-builder/internal/download"
+	"github.com/akalp/aseprite-builder/internal/logging"
+	"github.com/akalp/aseprite-builder/internal/paths"
+	"github.com/akalp/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/state"
+	"github.com/akalp/aseprite-builder/internal/upstream"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // Stage enumerates install pipeline stages; the TUI consumes these
@@ -231,7 +231,9 @@ func (s *Service) Install(ctx context.Context, opts InstallOptions, sink Progres
 	defer func() { _ = log.Close() }()
 	log.Line("aseprite-builder %s: install started", s.opts.BuilderVersion)
 
-	result, err := s.runPipeline(ctx, opts, sink, log)
+	cfg := s.runConfig()
+	applyRunConfig(&opts, cfg)
+	result, err := s.runPipeline(ctx, opts, verboseSink(sink, cfg, log), log)
 	if err != nil {
 		result.LogPath = logPath
 		log.Line("install failed: %v", err)

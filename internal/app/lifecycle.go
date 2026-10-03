@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/aseprite"
-	"github.com/aseprite-builder/aseprite-builder/internal/logging"
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/platform"
-	"github.com/aseprite-builder/aseprite-builder/internal/state"
+	"github.com/akalp/aseprite-builder/internal/aseprite"
+	"github.com/akalp/aseprite-builder/internal/logging"
+	"github.com/akalp/aseprite-builder/internal/paths"
+	"github.com/akalp/aseprite-builder/internal/platform"
+	"github.com/akalp/aseprite-builder/internal/state"
 )
 
 // Update installs the latest stable Aseprite version over the current
@@ -43,7 +43,9 @@ func (s *Service) Update(ctx context.Context, opts InstallOptions, sink Progress
 	}
 	log.Line("update: %s -> %s", current.AsepriteVersion, target.Version)
 
-	result, err := s.runPipeline(ctx, opts, sink, log)
+	cfg := s.runConfig()
+	applyRunConfig(&opts, cfg)
+	result, err := s.runPipeline(ctx, opts, verboseSink(sink, cfg, log), log)
 	result.LogPath = logPath
 	if err != nil {
 		log.Line("update failed: %v", err)
@@ -96,7 +98,9 @@ func (s *Service) Rebuild(ctx context.Context, opts RebuildOptions, sink Progres
 			}
 		}
 	}
-	result, err := s.runPipeline(ctx, installOpts, sink, log)
+	cfg := s.runConfig()
+	applyRunConfig(&installOpts, cfg)
+	result, err := s.runPipeline(ctx, installOpts, verboseSink(sink, cfg, log), log)
 	result.LogPath = logPath
 	if err != nil {
 		log.Line("rebuild failed: %v", err)
@@ -130,11 +134,14 @@ func (s *Service) Repair(ctx context.Context, sink ProgressSink) (InstallResult,
 	}
 
 	log.Line("repair: installation is damaged; rebuilding %s", current.AsepriteVersion)
-	result, err := s.runPipeline(ctx, InstallOptions{
+	installOpts := InstallOptions{
 		Version:               current.AsepriteVersion,
 		Channel:               stateChannelOrDefault(current.Channel),
 		ForceOverwriteUnowned: true,
-	}, sink, log)
+	}
+	cfg := s.runConfig()
+	applyRunConfig(&installOpts, cfg)
+	result, err := s.runPipeline(ctx, installOpts, verboseSink(sink, cfg, log), log)
 	result.LogPath = logPath
 	if err != nil {
 		log.Line("repair rebuild failed: %v", err)
@@ -177,6 +184,55 @@ func (s *Service) Uninstall(_ context.Context, opts UninstallOptions) error {
 		return fmt.Errorf("uninstall failed: %w", err)
 	}
 	return s.opts.Store.ClearInstall()
+}
+
+// PurgeOptions selects which builder-owned cache directories are
+// removed in addition to (or after) an uninstall. These mirror the
+// CLI's --purge-* flags.
+type PurgeOptions struct {
+	Sources bool
+	Tools   bool
+	Skia    bool
+	Logs    bool
+}
+
+// PurgeResult reports one purge target.
+type PurgeResult struct {
+	// What is a short label ("sources", "CMake/Ninja tool cache"...).
+	What string
+	// Dir is the removed (or attempted) directory.
+	Dir string
+	// Err is nil when the directory was removed.
+	Err error
+}
+
+// PurgeCaches removes the selected cache directories under the
+// builder's own layout — never anything else. Errors are reported per
+// target and never abort the remaining targets.
+func (s *Service) PurgeCaches(opts PurgeOptions) []PurgeResult {
+	type target struct {
+		what string
+		dir  string
+	}
+	var targets []target
+	if opts.Sources {
+		targets = append(targets, target{"sources", s.opts.Layout.Sources})
+	}
+	if opts.Tools {
+		targets = append(targets, target{"CMake/Ninja tool cache", s.opts.Layout.Tools})
+	}
+	if opts.Skia {
+		targets = append(targets, target{"Skia cache", s.opts.Layout.Skia})
+	}
+	if opts.Logs {
+		targets = append(targets, target{"logs", s.opts.Layout.Logs})
+	}
+	var results []PurgeResult
+	for _, t := range targets {
+		err := os.RemoveAll(t.dir)
+		results = append(results, PurgeResult{What: t.what, Dir: t.dir, Err: err})
+	}
+	return results
 }
 
 // Launch starts the installed application.

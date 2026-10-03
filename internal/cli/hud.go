@@ -6,7 +6,7 @@ import (
 	"os"
 	"unicode/utf8"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/app"
+	"github.com/akalp/aseprite-builder/internal/app"
 )
 
 // HUD rows displayed during install/update/rebuild, in this order:

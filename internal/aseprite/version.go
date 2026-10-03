@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // Version is Aseprite's dotted-numeric version ("1.3.18.6"). It shares

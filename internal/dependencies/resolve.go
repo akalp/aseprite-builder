@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/paths"
+	"github.com/akalp/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // Fetcher resolves the latest compatible upstream artifact for a tool

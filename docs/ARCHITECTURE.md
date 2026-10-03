@@ -7,30 +7,62 @@ explains how the code implements it.
 ## Dependency direction
 
 ```text
-cmd/aseprite-builder        (main: wire IO + signals)
+cmd/aseprite-builder        (main: wire IO + signals; no-args → TUI)
         ↓
-internal/cli                (command parsing, human output)
-        ↓
-internal/app                (application services: install/update/…)
-        ↓                          ↓
-internal/aseprite           internal/platform (+ platformselector)
-(downstream domain)         (OS implementations)
-        ↓
-internal/dependencies, internal/aseprite build orchestration
-        ↓
-infrastructure: runner, download, archive, upstream, paths, state, logging, version
+internal/cli    internal/tui            (frontends: parse/print / Bubble Tea)
+        └──────────────┬────────────────┘
+                       ↓
+               internal/app            (application services: install/update/…)
+                       ↓                          ↓
+        internal/aseprite           internal/platform (+ platformselector)
+        (downstream domain)         (OS implementations)
+                       ↓
+        internal/dependencies, internal/aseprite build orchestration
+                       ↓
+        infrastructure: runner, download, archive, upstream, paths, state, logging, version
 ```
 
 - **UI never contains business logic.** `internal/cli` only parses
-  flags, prints output and maps typed errors. The future TUI (Bubble
-  Tea) will consume the same `internal/app` services and
-  `app.ProgressEvent`s.
+  flags, prints output and maps typed errors; `internal/tui` is a
+  state machine that translates user choices into `internal/app`
+  calls and renders `app.ProgressEvent` streams (spec §34). The two
+  frontends are siblings and never import each other.
+- **Shared user-facing facts live in `internal/app`:** typed-error →
+  friendly-message mapping (`app.FriendlyMessage`) and the doctor
+  table (`DoctorReport.DoctorRows`) are built once and rendered by
+  both frontends, so CLI and TUI cannot drift.
 - **No `runtime.GOOS` outside the platform layer**, except in exactly
   one selector: `internal/platformselector` (plus `internal/paths`,
   which is a platform in its own right and selects per-OS defaults for
   user directories).
 - **No version matrices.** Versions come from upstream at runtime
   (see below).
+
+## TUI (interactive primary interface)
+
+`internal/tui` is the only package allowed to import UI dependencies
+(Bubble Tea, Lip Gloss — spec §10/§36; guarded by `internal/archtest`):
+
+```text
+internal/tui/
+    app.go        program bootstrap, TTY gating, post-exit summary
+    model.go      state machine: Model, Update, menus, confirmations
+    screens.go    one renderer per logical screen
+    events.go     app.ProgressEvent → view messages, stage table, op goroutine
+```
+
+Screens per spec §34: welcome (§7 notice, acknowledged once per
+machine, stored in `state.Config`) → home (§12 mock) → systemcheck
+(preflight doctor facts) → installoptions → installing (structured
+progress; Ctrl+C cancels the pipeline context) → result → diagnostics
+/ settings / advanced / confirmation / error (§39 failure UX with
+View log / Diagnostics / Retry / Back; unknown contracts get a
+distinct screen with a different action set per §17).
+
+UpdateAvailable and Updating collapse into the home banner and the
+installing screen (update-labeled); Installed is the result screen.
+Operations run on a goroutine whose context is canceled on Ctrl+C and
+again at program exit — no pipeline survives a dead TUI.
 
 ## Runtime resolution (zero-vendored-toolchain)
 

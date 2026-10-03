@@ -17,6 +17,19 @@ go run ./cmd/aseprite-builder help
 go run ./cmd/aseprite-builder doctor --json
 ```
 
+Running the binary with no arguments in a terminal opens the
+interactive TUI (spec §30); all subcommands use the non-interactive
+CLI. The TUI is only opened for real terminals — piped stdout prints
+the usage table instead, so automation is unaffected.
+
+## Testing the TUI
+
+`internal/tui` tests are pure model tests: `Update`/`View` transitions
+driven by synthetic `app.ProgressEvent`s, typed errors and key
+messages — no terminal, no TTY. `internal/archtest` guards the layer
+rules (UI imports only in `internal/tui`; frontends never import each
+other).
+
 ## Running the CLI against an isolated environment
 
 The builder writes to the user's cache and data directories. For
@@ -53,9 +66,13 @@ section 2.
 
 ```bash
 make check          # gofmt + vet + test
-make build          # build ./aseprite-builder binary into dist/ (gitignored)
-make clean          # remove dist/
+make build          # build ./aseprite-builder at the repo root (gitignored)
+make clean          # remove the repo-root binary and dist/
 ```
+
+The Go module now tracks dependencies normally (`go.mod`/`go.sum`,
+spec §36): UI libraries (Bubble Tea, Lip Gloss) are allowed only in
+`internal/tui`; business and data layers stay stdlib-only.
 
 Never commit: downloaded archives, extracted sources, toolchains, Skia
 packages, built Aseprite artifacts, or `.cache`. `.gitignore` covers

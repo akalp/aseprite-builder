@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // VerifyBuild confirms that a completed build produced a runnable

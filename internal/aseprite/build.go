@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // BuildRequest is everything the builder needs to run the upstream

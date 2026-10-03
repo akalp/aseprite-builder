@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // iconSet describes how to build one .icns bundle icon from the

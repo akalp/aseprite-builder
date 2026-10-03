@@ -23,8 +23,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
-	"github.com/aseprite-builder/aseprite-builder/internal/version"
+	"github.com/akalp/aseprite-builder/internal/runner"
+	"github.com/akalp/aseprite-builder/internal/version"
 )
 
 // Tool is one resolved build tool.

@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/app"
+	"github.com/akalp/aseprite-builder/internal/app"
 )
 
 // cmdUpdate implements `aseprite-builder update`.
@@ -156,28 +155,20 @@ func (c *CLI) cmdUninstall(ctx context.Context, args []string) int {
 	if *v.RemovePrev {
 		removed = append(removed, "the retained previous version")
 	}
-	if *v.PurgeSources {
-		purgeDir(c, "sources", svc.Layout().Sources)
-	}
-	if *v.PurgeTools {
-		purgeDir(c, "CMake/Ninja tool cache", svc.Layout().Tools)
-	}
-	if *v.PurgeSkia {
-		purgeDir(c, "Skia cache", svc.Layout().Skia)
-	}
-	if *v.PurgeLogs {
-		purgeDir(c, "logs", svc.Layout().Logs)
+	for _, pr := range svc.PurgeCaches(app.PurgeOptions{
+		Sources: *v.PurgeSources,
+		Tools:   *v.PurgeTools,
+		Skia:    *v.PurgeSkia,
+		Logs:    *v.PurgeLogs,
+	}) {
+		if pr.Err != nil {
+			fmt.Fprintf(c.Stderr, "note: could not remove %s (%s): %v\n", pr.What, pr.Dir, pr.Err)
+			continue
+		}
+		fmt.Fprintf(c.Stderr, "   removed %s\n", pr.Dir)
 	}
 	fmt.Fprintf(c.Stderr, "\n✅ Removed %s.\n", strings.Join(removed, ", "))
 	return 0
-}
-
-func purgeDir(c *CLI, what, dir string) {
-	if err := os.RemoveAll(dir); err != nil {
-		fmt.Fprintf(c.Stderr, "note: could not remove %s (%s): %v\n", what, dir, err)
-		return
-	}
-	fmt.Fprintf(c.Stderr, "   removed %s\n", dir)
 }
 
 // cmdDoctor implements `aseprite-builder doctor`.
@@ -214,54 +205,14 @@ func (c *CLI) cmdDoctor(ctx context.Context, args []string) int {
 }
 
 func (c *CLI) printDoctor(r app.DoctorReport) {
-	// Build a two-column table sized to the longest label.
-	type row struct {
-		ok           bool
-		name, detail string
-	}
-	var rows []row
-	rowOK := func(name, detail string) { rows = append(rows, row{true, name, detail}) }
-	rowFail := func(name, detail string) { rows = append(rows, row{false, name, detail}) }
-
-	rowOK("Operating system", fmt.Sprintf("%s %s", r.System.OS, r.System.OSVersion))
-	if r.System.Supported {
-		rowOK("Architecture", r.System.Arch)
-	} else {
-		rowFail("Architecture", r.System.Arch+" (unsupported)")
-	}
-	for _, c2 := range r.Requirements {
-		if c2.OK {
-			rowOK(c2.Name, c2.Detail)
-		} else {
-			rowFail(c2.Name, c2.Fix)
-		}
-	}
-	for _, t := range r.Tools {
-		if t.Status == "none" || t.Status == "error" {
-			rowFail(t.Name, "unavailable and no downloadable alternative was configured")
-		} else {
-			rowOK(t.Name, t.Display())
-		}
-	}
-	if r.Skia.Status == "cached" {
-		rowOK("Skia", "cached: "+strings.Join(r.Skia.CachedTags, ", "))
-	} else {
-		rowOK("Skia", "no cached artifact (resolved during install)")
-	}
-	if r.Installation != nil && r.Installation.HealthyChecked {
-		if r.Installation.Healthy {
-			rowOK("Installation", fmt.Sprintf("Aseprite %s at %s", r.Installation.InstalledVersion, r.Installation.AppPath))
-		} else {
-			rowFail("Installation", "broken — run: aseprite-builder repair")
-		}
-	} else {
-		rowOK("Installation", "none (nothing installed yet)")
-	}
+	// The rows come from the app layer so the TUI diagnostics screen
+	// shows identical facts; this function only formats them.
+	rows := r.DoctorRows()
 
 	nameWidth := len("Installation")
 	for _, row := range rows {
-		if len(row.name) > nameWidth {
-			nameWidth = len(row.name)
+		if len(row.Name) > nameWidth {
+			nameWidth = len(row.Name)
 		}
 	}
 
@@ -269,10 +220,10 @@ func (c *CLI) printDoctor(r app.DoctorReport) {
 	fmt.Fprintln(c.Stdout, "")
 	for _, row := range rows {
 		mark := "✓"
-		if !row.ok {
+		if !row.OK {
 			mark = "✗"
 		}
-		fmt.Fprintf(c.Stdout, "%s %-*s  %s\n", mark, nameWidth, row.name, row.detail)
+		fmt.Fprintf(c.Stdout, "%s %-*s  %s\n", mark, nameWidth, row.Name, row.Detail)
 	}
 	fmt.Fprintln(c.Stdout, "")
 	if r.Status == "healthy" {

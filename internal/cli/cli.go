@@ -7,20 +7,14 @@ package cli
 import (
 	"bufio"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"runtime"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/aseprite-builder/aseprite-builder/internal/app"
-	"github.com/aseprite-builder/aseprite-builder/internal/aseprite"
-	"github.com/aseprite-builder/aseprite-builder/internal/paths"
-	"github.com/aseprite-builder/aseprite-builder/internal/platformselector"
-	"github.com/aseprite-builder/aseprite-builder/internal/runner"
-	"github.com/aseprite-builder/aseprite-builder/internal/state"
+	"github.com/akalp/aseprite-builder/internal/app"
+	"github.com/akalp/aseprite-builder/internal/aseprite"
 )
 
 type exitCode int
@@ -184,37 +178,11 @@ func (c *CLI) newHUD(quiet bool) *HUD {
 	return NewHUD(c.Stderr)
 }
 
-// newService builds the app service from real infrastructure.
+// newService builds the app service from real infrastructure via the
+// shared wiring in the app layer.
 func newService(ctx context.Context, builderVersion string, verifyPlatform bool) (*app.Service, error) {
-	layout, err := paths.New("")
-	if err != nil {
-		return nil, err
-	}
-	if err := layout.EnsureDirs(); err != nil {
-		return nil, fmt.Errorf("prepare user directories: %w", err)
-	}
-	plat, err := platformselector.NewForRunningSystem(builderVersion)
-	if verifyPlatform && err != nil {
-		if errors.Is(err, platformselector.ErrUnsupportedPlatform) {
-			return nil, fmt.Errorf("aseprite-builder does not support %s yet", runtime.GOOS)
-		}
-		return nil, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	r := runner.NewConcreteRunner()
-	rel := aseprite.NewGithubReleaseProvider()
-	store := state.Store{Dir: layout.State}
-
-	return app.New(app.Options{
-		BuilderVersion: builderVersion,
-		Layout:         layout,
-		Platform:       plat,
-		Releases:       rel,
-		Runner:         r,
-		Store:          store,
-	})
+	_ = ctx // kept for ServiceFactory signature compatibility
+	return app.NewDefault(builderVersion, verifyPlatform)
 }
 
 // licenseNotice is printed before the first installation, per section 7
@@ -245,45 +213,6 @@ func (c *CLI) confirm(prompt string) bool {
 	default:
 		return false
 	}
-}
-
-// friendlyDownloadError turns network failures into actionable text.
-func friendlyDownloadError(err error) string {
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "no such host"), strings.Contains(msg, "connection refused"):
-		return "aseprite-builder could not reach the internet. Check your network connection\nand try again."
-	case strings.Contains(msg, "rate limited"):
-		return "GitHub's API rate limit was hit. Aseprite metadata could not be resolved\nright now; try again later."
-	case strings.Contains(msg, "sha256 mismatch"):
-		return "A downloaded archive failed verification and was discarded.\nNothing was installed. Please try again."
-	case strings.Contains(msg, "unexpected HTTP status 404"):
-		return "The requested upstream artifact was not found; the upstream release page\nmay have changed."
-	default:
-		return ""
-	}
-}
-
-// brief extracts n lines.
-func brief(s string, n int) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	out := strings.Join(lines, "\n")
-	if out == "" {
-		return ""
-	}
-	return "\n\n   " + strings.Join(strings.Split(out, "\n"), "\n   ")
-}
-
-func firstLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	out := lines[0]
-	if len(lines) > 1 {
-		out += " (more details in the operation log)"
-	}
-	return out
 }
 
 // cmdInstall implements `aseprite-builder install`.
@@ -334,64 +263,8 @@ func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
 
 // printServiceError maps typed errors to the plain-language failure UX
 // required by the spec (never raw compiler output as the main message).
+// The mapping itself lives in app.FriendlyMessage so the TUI renders
+// the exact same text.
 func (c *CLI) printServiceError(err error) {
-	fmt.Fprintf(c.Stderr, "\n✗ %s\n", friendlyMessage(err))
-}
-
-func friendlyMessage(err error) string {
-	switch {
-	case errors.Is(err, app.ErrSystemRequirements):
-		var sre app.SystemRequirementsError
-		ok := errors.As(err, &sre)
-		var b strings.Builder
-		b.WriteString("This machine is missing some requirements before Aseprite can be built.\n")
-		if ok {
-			for _, ck := range sre.Checks {
-				if ck.OK {
-					continue
-				}
-				fmt.Fprintf(&b, "  ✗ %s\n", ck.Name)
-				if ck.Fix != "" {
-					fmt.Fprintf(&b, "    → %s\n", ck.Fix)
-				}
-			}
-		}
-		b.WriteString("Nothing was installed or modified.")
-		return b.String()
-	case errors.Is(err, app.ErrUnknownContract):
-		var uce app.UnknownContractError
-		detail := ""
-		if errors.As(err, &uce) && uce.Reason != nil {
-			detail = "\n\nDetails: " + uce.Reason.Error()
-		}
-		return "This Aseprite release uses a build layout that this version of\n" +
-			"aseprite-builder does not recognize. To stay safe, nothing was built or\n" +
-			"installed. Updating aseprite-builder may add support." + detail
-	case errors.Is(err, app.ErrUpToDate):
-		return "Aseprite is already up to date."
-	case errors.Is(err, app.ErrAlreadyInstalled):
-		return "This Aseprite version is already installed."
-	case errors.Is(err, app.ErrNotInstalled):
-		return "This command needs an aseprite-builder installation (run install first)."
-	default:
-		var buildErr *aseprite.UpstreamBuildError
-		if errors.As(err, &buildErr) {
-			return fmt.Sprintf("Aseprite could not be compiled: the upstream build process failed.\n"+
-				"Check the operation log for the exact compiler output.%s", brief(buildErr.Tail, 1))
-		}
-		var contract *aseprite.ContractViolationError
-		if errors.As(err, &contract) {
-			return "The upstream build did not produce the expected output. This usually means\n" +
-				"the Aseprite build contract changed; nothing was installed.\n\n" +
-				fmt.Sprintf("Details: %v", contract)
-		}
-		msg := err.Error()
-		if unpack := friendlyDownloadError(err); unpack != "" {
-			return unpack
-		}
-		if strings.Contains(msg, "context canceled") || strings.Contains(msg, "context deadline exceeded") {
-			return "Operation cancelled."
-		}
-		return firstLine(msg)
-	}
+	fmt.Fprintf(c.Stderr, "\n✗ %s\n", app.FriendlyMessage(err))
 }
