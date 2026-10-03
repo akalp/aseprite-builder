@@ -142,7 +142,8 @@ func TestRequirementsMissingToolchain(t *testing.T) {
 
 func TestInstallFresh(t *testing.T) {
 	dir := t.TempDir()
-	p := newTestPlatform(t, fakeVersionRunner("1.3.18.6"))
+	f := fakeVersionRunner("1.3.18.6")
+	p := newTestPlatform(t, f)
 	built := fakeApp(t, dir, "1.3.18.6")
 
 	// The staged verification command targets the staged path; fake it.
@@ -171,6 +172,17 @@ func TestInstallFresh(t *testing.T) {
 	// No previous existed before.
 	if outcome.PreviousPath != "" {
 		t.Errorf("PreviousPath = %q, want empty on fresh install", outcome.PreviousPath)
+	}
+	// The activated bundle must be registered with LaunchServices so
+	// Spotlight/Raycast/Dock index it immediately.
+	var lsregister bool
+	for _, c := range f.Called() {
+		if strings.HasSuffix(c.Name, "lsregister") && len(c.Args) == 2 && c.Args[0] == "-f" {
+			lsregister = true
+		}
+	}
+	if !lsregister {
+		t.Errorf("lsregister -f <bundle> not invoked; calls = %+v", f.Called())
 	}
 }
 

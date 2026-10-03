@@ -45,6 +45,10 @@ type BuildOutput struct {
 	AppPath    string // macOS: path to Aseprite.app produced by the build
 	Executable string // plain executable path (non-macOS or bundle exec)
 	DataDir    string // runtime data dir to install alongside, when applicable
+	// IconsDir is the upstream source's icon set directory
+	// (<source>/data/icons on macOS), used to generate the native .icns
+	// bundle icons. Empty when unavailable.
+	IconsDir string
 }
 
 // InstallOutcome describes what the platform installer did.

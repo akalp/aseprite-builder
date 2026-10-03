@@ -3,6 +3,7 @@ package aseprite
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +41,10 @@ type BuildOutput struct {
 	DataDir string
 	// BuildDir is the directory the upstream build wrote into.
 	BuildDir string
+	// IconsDir is the upstream icon set directory (data/icons) used by
+	// the macOS installer to generate .icns bundle icons. Empty when
+	// the source tree does not ship one.
+	IconsDir string
 }
 
 // Builder orchestrates the upstream build flow. It does not reimplement
@@ -59,7 +64,15 @@ type BuildOutput struct {
 //   - runs cmake --build ... -- aseprite,
 //   - writes the bundle to <source>/build/bin/Aseprite.app.
 type Builder struct {
+	// Runner, when set, is used directly (tests inject fakes here).
 	Runner runner.Runner
+	// Stream receives the raw upstream build output for logging. When
+	// Runner is nil (the production path) a concrete runner is created
+	// with Stream and progress reporting wired together.
+	Stream io.Writer
+	// Progress reports compile/configure sub-state derived from the
+	// upstream build output.
+	Progress BuildProgressSink
 	// Log receives per-command records; nil disables.
 	Log CommandLogger
 }
@@ -97,7 +110,14 @@ func (b Builder) Build(ctx context.Context, req BuildRequest) (BuildOutput, erro
 	if b.Log != nil {
 		b.Log.Command(cmd.Name, cmd.Args, cmd.Env, cmd.Dir)
 	}
-	res, err := b.Runner.Run(ctx, cmd)
+
+	if b.Progress != nil {
+		// Announce the configure phase immediately: everything the
+		// upstream script does before ninja reports counters is
+		// configuration from the user's point of view.
+		b.Progress(BuildProgress{Phase: BuildPhaseConfigure})
+	}
+	res, err := b.runnerFor().Run(ctx, cmd)
 	if err != nil {
 		// Context cancellation and start failures.
 		return BuildOutput{}, fmt.Errorf("upstream build failed: %w", err)
@@ -117,6 +137,23 @@ func (b Builder) Build(ctx context.Context, req BuildRequest) (BuildOutput, erro
 		return BuildOutput{}, err
 	}
 	return out, nil
+}
+
+// runnerFor constructs the actual Runner for the build invocation.
+// Injected Runner wins (tests); otherwise a concrete runner streams
+// output and feeds the progress tracker simultaneously.
+func (b Builder) runnerFor() runner.Runner {
+	if b.Runner != nil {
+		return b.Runner
+	}
+	var stream io.Writer = io.Discard
+	if b.Stream != nil {
+		stream = b.Stream
+	}
+	if b.Progress == nil {
+		return runner.ConcreteRunner{Stream: stream}
+	}
+	return runner.ConcreteRunner{Stream: io.MultiWriter(stream, newProgressTracker(b.Progress))}
 }
 
 // UpstreamBuildError wraps a non-zero exit from the upstream build with
@@ -208,7 +245,20 @@ func locateBuildOutput(req BuildRequest) (BuildOutput, error) {
 		Executable: executable,
 		DataDir:    filepath.Join(app, "Contents", "Resources", "data"),
 		BuildDir:   filepath.Join(req.SourceDir, "build"),
+		IconsDir:   sourceIconsDir(req.SourceDir),
 	}, nil
+}
+
+// sourceIconsDir returns the upstream icon set directory when present.
+// The official source ships data/icons with size-named PNG members
+// (ase16.png … ase256.png, plus hd/asehd.png), which macOS uses to
+// generate .icns bundle icons.
+func sourceIconsDir(sourceDir string) string {
+	icons := filepath.Join(sourceDir, "data", "icons")
+	if fi, err := os.Stat(icons); err == nil && fi.IsDir() {
+		return icons
+	}
+	return ""
 }
 
 // ContractViolationError reports a mismatch between what the builder

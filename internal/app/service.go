@@ -74,6 +74,13 @@ type ProgressEvent struct {
 	Total   int64
 }
 
+// Build sub-phase identifiers used in StageBuild progress events
+// (mirroring the phases the upstream build reports).
+const (
+	BuildPhaseConfigure = "configure"
+	BuildPhaseCompile   = "compile"
+)
+
 // ProgressSink receives progress events. It must be cheap: services
 // emit synchronously.
 type ProgressSink func(ProgressEvent)
@@ -295,11 +302,29 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 	}
 
 	// 9. Build ------------------------------------------------------------
-	sink.emit(ProgressEvent{Stage: StageBuild, Message: "Compiling Aseprite (this takes a while)"})
+	// The Builder's first progress tick announces the configure phase;
+	// no separate announcement is needed here (the HUD shows
+	// "Configuring build" until ninja begins reporting counters).
 	log.Line("build: invoking upstream build flow in %s", provisioned.SourceDir)
 	builder := aseprite.Builder{
-		Runner: s.buildRunner(log),
+		Runner: s.opts.BuildRunnerOverride, // non-nil in tests (fakes)
+		Stream: log.Writer(),
 		Log:    log,
+		Progress: func(p aseprite.BuildProgress) {
+			phase := p.Phase
+			switch phase {
+			case aseprite.BuildPhaseConfigure:
+				phase = BuildPhaseConfigure
+			case aseprite.BuildPhaseCompile:
+				phase = BuildPhaseCompile
+			}
+			sink.emit(ProgressEvent{
+				Stage:   StageBuild,
+				Message: phase,
+				Current: p.Done,
+				Total:   p.Total,
+			})
+		},
 	}
 	if err := s.opts.Platform.Prepare(ctx); err != nil {
 		return result, fmt.Errorf("platform prepare: %w", err)
@@ -336,6 +361,7 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 		AppPath:    buildOut.AppPath,
 		Executable: buildOut.Executable,
 		DataDir:    buildOut.DataDir,
+		IconsDir:   buildOut.IconsDir,
 	})
 	if err != nil {
 		return result, fmt.Errorf("install failed: %w", err)
@@ -380,18 +406,6 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 		}
 	}
 	return result, nil
-}
-
-// buildRunner returns the runner used for the actual upstream build:
-// streaming process output into the operation log by default, or the
-// injected override in tests.
-func (s *Service) buildRunner(log *logging.Logger) runner.Runner {
-	if s.opts.BuildRunnerOverride != nil {
-		return s.opts.BuildRunnerOverride
-	}
-	r := runner.NewConcreteRunner()
-	r.Stream = log.Writer()
-	return r
 }
 
 // resolveRelease picks the release to build: the pinned version when

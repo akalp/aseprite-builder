@@ -54,9 +54,24 @@ type Platform struct {
 	// AllowReplaceUnowned lets install overwrite an existing Aseprite.app
 	// the builder cannot prove it owns. The user must opt in explicitly.
 	AllowReplaceUnowned bool
+	// Logger receives non-fatal operational notes (nil disables).
+	Logger warningLogger
 	// Now overrides wall-clock time in tests.
 	Now func() time.Time
 }
+
+// logger returns a never-nil warning logger.
+func (p Platform) logger() warningLogger {
+	if p.Logger != nil {
+		return p.Logger
+	}
+	return nopLogger{}
+}
+
+// nopLogger discards warnings (used when no logger is wired).
+type nopLogger struct{}
+
+func (nopLogger) Line(string, ...any) {}
 
 // New returns a macOS Platform with the default install root.
 func New(r runner.Runner, builderVersion string) (Platform, error) {
@@ -232,6 +247,19 @@ func (p Platform) Install(ctx context.Context, out platform.BuildOutput) (platfo
 	if p.Now != nil {
 		now = p.Now
 	}
+
+	// Generate .icns bundle icons from the upstream icon set. This adds
+	// content to the staged bundle and must happen BEFORE the ownership
+	// marker and ad-hoc signing, which seal its contents.
+	if out.IconsDir != "" {
+		if err := generateBundleIcons(ctx, p.Runner, staged, out.IconsDir, p.logger()); err != nil {
+			// Best-effort: icon generation never blocks installation.
+			if p.Logger != nil {
+				p.Logger.Line("note: icon generation skipped: %v", err)
+			}
+		}
+	}
+
 	if err := writeMarker(staged, marker{
 		Version:        out.Version,
 		BuilderVersion: p.BuilderVersion,
@@ -287,11 +315,32 @@ func (p Platform) Install(ctx context.Context, out platform.BuildOutput) (platfo
 		return platform.InstallOutcome{}, fmt.Errorf("clean staging dir: %w", err)
 	}
 
+	// Register with LaunchServices so Spotlight, Raycast, Dock and file
+	// associations see the new bundle immediately. Failures are
+	// non-fatal: macOS also registers lazily on first launch.
+	p.registerWithLaunchServices(ctx, target)
+
 	return platform.InstallOutcome{
 		AppPath:        target,
 		PreviousPath:   previous,
 		StagingRemoved: true,
 	}, nil
+}
+
+// lsregisterPath is the system LaunchService registration tool. It is
+// part of macOS itself (no Xcode needed) and runs unprivileged with -f.
+const lsregisterPath = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+// registerWithLaunchServices forces the LaunchServices database to
+// refresh the bundle. Best-effort.
+func (p Platform) registerWithLaunchServices(ctx context.Context, app string) {
+	res, err := p.Runner.Run(ctx, runner.Command{Name: lsregisterPath, Args: []string{"-f", app}})
+	if err != nil {
+		return // tool absent or intercepted; lazy registration still works
+	}
+	if !res.OK() && p.Logger != nil {
+		p.Logger.Line("note: LaunchServices registration exited %d for %s", res.ExitCode, app)
+	}
 }
 
 // allowOverwrite reports whether an existing target may be replaced.

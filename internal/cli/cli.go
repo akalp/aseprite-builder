@@ -112,18 +112,22 @@ func (c *CLI) serviceFor(ctx context.Context, verifyPlatform bool) (*app.Service
 	return newService(ctx, c.BuilderVersion, verifyPlatform)
 }
 
-// progressPrinter emits one clean line per stage on stderr.
 func (c *CLI) progressPrinter(quiet bool) app.ProgressSink {
+	hud := c.newHUD(quiet)
+	if hud == nil {
+		return nil
+	}
+	return hud.Sink()
+}
+
+// newHUD builds the in-place progress table printer for a pipeline run.
+// quiet suppresses progress rendering entirely (used by tests). The
+// caller owns the HUD lifetime; Close must be invoked after the run.
+func (c *CLI) newHUD(quiet bool) *HUD {
 	if quiet {
 		return nil
 	}
-	return func(e app.ProgressEvent) {
-		msg := e.Message
-		if e.Current > 0 || e.Total > 0 {
-			msg = fmt.Sprintf("%s (%d/%d)", e.Message, e.Current, e.Total)
-		}
-		fmt.Fprintf(c.Stderr, "\n▸ %s\n", msg)
-	}
+	return NewHUD(c.Stderr)
 }
 
 // newService builds the app service from real infrastructure.
@@ -262,7 +266,11 @@ func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
 		return int(exitCode(1))
 	}
 
-	result, err := svc.Install(ctx, opts, c.progressPrinter(false))
+	hud := c.newHUD(false)
+	result, err := svc.Install(ctx, opts, hud.Sink())
+	if hud != nil {
+		hud.Close(err == nil)
+	}
 	if err != nil {
 		c.printServiceError(err)
 		if result.LogPath != "" {

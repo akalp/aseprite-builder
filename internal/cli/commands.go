@@ -34,7 +34,9 @@ func (c *CLI) cmdUpdate(ctx context.Context, args []string) int {
 		return int(exitCode(1))
 	}
 
-	result, err := svc.Update(ctx, app.InstallOptions{LaunchAfterInstall: *launch}, c.progressPrinter(false))
+	hud := c.newHUD(false)
+	result, err := svc.Update(ctx, app.InstallOptions{LaunchAfterInstall: *launch}, hud.Sink())
+	hud.Close(err == nil)
 	if err != nil {
 		if errors.Is(err, app.ErrUpToDate) {
 			fmt.Fprintln(c.Stderr, "Aseprite is already up to date.")
@@ -73,7 +75,9 @@ func (c *CLI) cmdRepair(ctx context.Context) int {
 		c.printServiceError(err)
 		return 1
 	}
-	result, err := svc.Repair(ctx, c.progressPrinter(false))
+	hud := c.newHUD(false)
+	result, err := svc.Repair(ctx, hud.Sink())
+	hud.Close(err == nil)
 	if err != nil {
 		c.printServiceError(err)
 		if result.LogPath != "" {
@@ -107,7 +111,9 @@ func (c *CLI) cmdRebuild(ctx context.Context, args []string) int {
 		c.printServiceError(err)
 		return 1
 	}
-	result, err := svc.Rebuild(ctx, app.RebuildOptions{Clean: *clean}, c.progressPrinter(false))
+	hud := c.newHUD(false)
+	result, err := svc.Rebuild(ctx, app.RebuildOptions{Clean: *clean}, hud.Sink())
+	hud.Close(err == nil)
 	if err != nil {
 		c.printServiceError(err)
 		if result.LogPath != "" {
