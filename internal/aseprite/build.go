@@ -106,6 +106,13 @@ func (b Builder) Build(ctx context.Context, req BuildRequest) (BuildOutput, erro
 		Args: []string{req.Contract.BuildScript, "--auto", "--norun"},
 		Dir:  req.SourceDir,
 		Env:  env,
+		// Upstream build.sh asks for a build selection when its own
+		// state directory already lists builds (e.g. a prior install
+		// attempt left <source>/build with a CMakeCache). Our workdirs
+		// only ever contain the single user-mode "build" directory, so
+		// answering "1" selects the existing build; on a first build
+		// stdin stays empty and --auto skips prompts entirely.
+		Stdin: buildStdinFor(req.SourceDir, req.Contract),
 	}
 	if b.Log != nil {
 		b.Log.Command(cmd.Name, cmd.Args, cmd.Env, cmd.Dir)
@@ -207,6 +214,18 @@ func (b Builder) seedUpstreamConfig(req BuildRequest) error {
 		}
 	}
 	return nil
+}
+
+// buildStdinFor composes the stdin answer for upstream build.sh's
+// build-selection prompt: "1" when at least one existing build sits in
+// the user-mode build dir, nothing otherwise. The numbered menu maps
+// positionally; our managed workdirs only ever hold one.
+func buildStdinFor(sourceDir string, _ Contract) []byte {
+	matches, err := filepath.Glob(filepath.Join(sourceDir, "build", "*", "CMakeCache.txt"))
+	if err != nil || len(matches) == 0 {
+		return nil
+	}
+	return []byte("1\n")
 }
 
 // buildEnv composes the environment for the upstream build: PATH is

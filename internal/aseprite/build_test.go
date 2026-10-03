@@ -225,6 +225,46 @@ func TestBuildStaleSkiaSymlinkRepointed(t *testing.T) {
 	_ = out
 }
 
+func TestBuildStdinAnswersBuildSelectionWhenBuildsExist(t *testing.T) {
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "bash" && len(c.Args) == 3 && strings.HasSuffix(c.Args[0], "build.sh") {
+			fakeBuildOutput(t, src, "1.3.18.6")
+			return runner.Result{ExitCode: 0}, true
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+
+	// No prior build: empty stdin.
+	_, _ = b.Build(context.Background(), BuildRequest{SourceDir: src,
+		Contract: Contract{BuildScript: filepath.Join(src, "build.sh")}})
+	calls := r.Called()
+	if len(calls) != 1 || len(calls[0].Stdin) != 0 {
+		t.Fatalf("first build stdin = %q", calls[0].Stdin)
+	}
+
+	// A prior build's CMakeCache makes upstream --auto prompt; builder
+	// must answer "1".
+	cacheDir := filepath.Join(src, "build", "build")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "CMakeCache.txt"), []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fakeBuildOutput(t, src, "1.3.18.6")
+	r.Reset()
+	if _, err := b.Build(context.Background(), BuildRequest{SourceDir: src,
+		Contract: Contract{BuildScript: filepath.Join(src, "build.sh")}}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	calls = r.Called()
+	if len(calls) != 1 || string(calls[0].Stdin) != "1\n" {
+		t.Errorf("stdin with prior builds = %q, want 1\\n", calls[0].Stdin)
+	}
+}
+
 func TestVerifyBuildOK(t *testing.T) {
 	src := fixtureSource(t)
 	fakeBuildOutput(t, src, "1.3.18.6")
