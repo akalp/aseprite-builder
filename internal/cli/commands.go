@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -15,13 +13,9 @@ import (
 
 // cmdUpdate implements `aseprite-builder update`.
 func (c *CLI) cmdUpdate(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	yes := fs.Bool("yes", false, "do not ask for confirmation")
-	launch := fs.Bool("launch", false, "launch Aseprite after a successful update")
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(c.Stderr, "update: %v\n", err)
-		return int(exitCode(2))
+	fs, v := updateFlags()
+	if code, ok := parseArgs("update", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
 	}
 
 	svc, err := c.serviceFor(ctx, true)
@@ -29,13 +23,13 @@ func (c *CLI) cmdUpdate(ctx context.Context, args []string) int {
 		c.printServiceError(err)
 		return 1
 	}
-	if !*yes && !c.confirm("Check for updates and install the latest stable Aseprite?") {
+	if !*v.Yes && !c.confirm("Check for updates and install the latest stable Aseprite?") {
 		fmt.Fprintln(c.Stderr, "update cancelled; nothing was changed")
 		return int(exitCode(1))
 	}
 
 	hud := c.newHUD(false)
-	result, err := svc.Update(ctx, app.InstallOptions{LaunchAfterInstall: *launch}, hud.Sink())
+	result, err := svc.Update(ctx, app.InstallOptions{LaunchAfterInstall: *v.Launch}, hud.Sink())
 	hud.Close(err == nil)
 	if err != nil {
 		if errors.Is(err, app.ErrUpToDate) {
@@ -54,7 +48,11 @@ func (c *CLI) cmdUpdate(ctx context.Context, args []string) int {
 }
 
 // cmdLaunch implements `aseprite-builder launch`.
-func (c *CLI) cmdLaunch(ctx context.Context) int {
+func (c *CLI) cmdLaunch(ctx context.Context, args []string) int {
+	fs := plainFlags("launch")
+	if code, ok := parseArgs("launch", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
+	}
 	svc, err := c.serviceFor(ctx, true)
 	if err != nil {
 		c.printServiceError(err)
@@ -69,7 +67,11 @@ func (c *CLI) cmdLaunch(ctx context.Context) int {
 }
 
 // cmdRepair implements `aseprite-builder repair`.
-func (c *CLI) cmdRepair(ctx context.Context) int {
+func (c *CLI) cmdRepair(ctx context.Context, args []string) int {
+	fs := plainFlags("repair")
+	if code, ok := parseArgs("repair", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
+	}
 	svc, err := c.serviceFor(ctx, true)
 	if err != nil {
 		c.printServiceError(err)
@@ -98,12 +100,9 @@ func sdpResult(r app.InstallResult) string {
 
 // cmdRebuild implements `aseprite-builder rebuild`.
 func (c *CLI) cmdRebuild(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("rebuild", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	clean := fs.Bool("clean", false, "start from a fresh source extraction (discards previous build output, keeps your user data)")
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(c.Stderr, "rebuild: %v\n", err)
-		return int(exitCode(2))
+	fs, v := rebuildFlags()
+	if code, ok := parseArgs("rebuild", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
 	}
 
 	svc, err := c.serviceFor(ctx, true)
@@ -112,7 +111,7 @@ func (c *CLI) cmdRebuild(ctx context.Context, args []string) int {
 		return 1
 	}
 	hud := c.newHUD(false)
-	result, err := svc.Rebuild(ctx, app.RebuildOptions{Clean: *clean}, hud.Sink())
+	result, err := svc.Rebuild(ctx, app.RebuildOptions{Clean: *v.Clean}, hud.Sink())
 	hud.Close(err == nil)
 	if err != nil {
 		c.printServiceError(err)
@@ -128,17 +127,9 @@ func (c *CLI) cmdRebuild(ctx context.Context, args []string) int {
 
 // cmdUninstall implements `aseprite-builder uninstall`.
 func (c *CLI) cmdUninstall(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	force := fs.Bool("force", false, "remove Aseprite.app even if this tool cannot prove it installed it")
-	removePrev := fs.Bool("previous", false, "also remove the retained previous version")
-	purgeSources := fs.Bool("purge-sources", false, "also remove downloaded Aseprite source trees")
-	purgeTools := fs.Bool("purge-tools", false, "also remove downloaded CMake/Ninja caches")
-	purgeSkia := fs.Bool("purge-skia", false, "also remove downloaded Skia artifacts")
-	purgeLogs := fs.Bool("purge-logs", false, "also remove operation logs")
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(c.Stderr, "uninstall: %v\n", err)
-		return int(exitCode(2))
+	fs, v := uninstallFlags()
+	if code, ok := parseArgs("uninstall", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
 	}
 
 	svc, err := c.serviceFor(ctx, true)
@@ -147,7 +138,7 @@ func (c *CLI) cmdUninstall(ctx context.Context, args []string) int {
 		return 1
 	}
 	prompt := "Remove the aseprite-builder installation of Aseprite?"
-	if *purgeSources || *purgeTools || *purgeSkia || *purgeLogs {
+	if *v.PurgeSources || *v.PurgeTools || *v.PurgeSkia || *v.PurgeLogs {
 		prompt = "Remove Aseprite and the selected aseprite-builder caches?"
 	}
 	if !c.confirm(prompt) {
@@ -155,26 +146,26 @@ func (c *CLI) cmdUninstall(ctx context.Context, args []string) int {
 		return int(exitCode(1))
 	}
 	if err := svc.Uninstall(ctx, app.UninstallOptions{
-		Force:          *force,
-		RemovePrevious: *removePrev,
+		Force:          *v.Force,
+		RemovePrevious: *v.RemovePrev,
 	}); err != nil {
 		c.printServiceError(err)
 		return int(exitCode(1))
 	}
 	removed := []string{"the application"}
-	if *removePrev {
+	if *v.RemovePrev {
 		removed = append(removed, "the retained previous version")
 	}
-	if *purgeSources {
+	if *v.PurgeSources {
 		purgeDir(c, "sources", svc.Layout().Sources)
 	}
-	if *purgeTools {
+	if *v.PurgeTools {
 		purgeDir(c, "CMake/Ninja tool cache", svc.Layout().Tools)
 	}
-	if *purgeSkia {
+	if *v.PurgeSkia {
 		purgeDir(c, "Skia cache", svc.Layout().Skia)
 	}
-	if *purgeLogs {
+	if *v.PurgeLogs {
 		purgeDir(c, "logs", svc.Layout().Logs)
 	}
 	fmt.Fprintf(c.Stderr, "\n✅ Removed %s.\n", strings.Join(removed, ", "))
@@ -191,12 +182,9 @@ func purgeDir(c *CLI, what, dir string) {
 
 // cmdDoctor implements `aseprite-builder doctor`.
 func (c *CLI) cmdDoctor(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(c.Stderr, "doctor: %v\n", err)
-		return int(exitCode(2))
+	fs, v := doctorFlags()
+	if code, ok := parseArgs("doctor", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
 	}
 
 	svc, err := c.serviceFor(ctx, false) // doctor works even on unsupported OS
@@ -209,7 +197,7 @@ func (c *CLI) cmdDoctor(ctx context.Context, args []string) int {
 		c.printServiceError(err)
 		return int(exitCode(1))
 	}
-	if *asJSON {
+	if *v.AsJSON {
 		data, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
 			fmt.Fprintf(c.Stderr, "doctor: %v\n", err)
@@ -295,7 +283,11 @@ func (c *CLI) printDoctor(r app.DoctorReport) {
 }
 
 // cmdVersion implements `aseprite-builder version`.
-func (c *CLI) cmdVersion() int {
+func (c *CLI) cmdVersion(args []string) int {
+	fs := plainFlags("version")
+	if code, ok := parseArgs("version", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
+	}
 	fmt.Fprintf(c.Stdout, "aseprite-builder %s\n", c.BuilderVersion)
 	svc, err := newService(context.Background(), c.BuilderVersion, false)
 	if err != nil {

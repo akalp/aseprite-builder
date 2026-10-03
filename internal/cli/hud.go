@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/aseprite-builder/aseprite-builder/internal/app"
@@ -205,16 +204,6 @@ func (h *HUD) rightText(i int) string {
 	default:
 		return "○"
 	}
-}
-
-// padTo right-pads s with spaces to n display columns (labels are
-// plain, so rune count is the display width).
-func padTo(s string, n int) string {
-	gap := n - utf8.RuneCountInString(s)
-	if gap <= 0 {
-		return s
-	}
-	return s + strings.Repeat(" ", gap)
 }
 
 // percentText formats done/total as a percentage string ("" when the

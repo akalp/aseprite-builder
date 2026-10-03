@@ -291,3 +291,108 @@ func zipBytesForTest(t *testing.T, files map[string]string) []byte {
 	}
 	return data
 }
+
+// Help behavior tests implementing the approved help policy:
+//   - top-level help shows every command's flags inline, exit 0
+//   - `<cmd> --help` prints that command's flags, exit 0 (no service
+//     is constructed — help must never hit the network)
+//   - `help <cmd>` mirrors `<cmd> --help`
+//   - an unknown flag prints error + usage on stderr, exit 2.
+
+func panicFactory(t *testing.T) func(context.Context, string, bool) (*app.Service, error) {
+	t.Helper()
+	return func(context.Context, string, bool) (*app.Service, error) {
+		t.Fatal("service must not be constructed while rendering help")
+		return nil, nil
+	}
+}
+
+func TestTopLevelHelpListsFlagsInline(t *testing.T) {
+	c, stdout, _ := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	if code := c.Run(context.Background(), []string{"--help"}); code != 0 {
+		t.Errorf("exit = %d", code)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"install", "uninstall", "doctor",
+		"--version", "--yes", "--force", "--keep-workspace",
+		"--previous", "--purge-sources", "--purge-tools", "--purge-skia", "--purge-logs",
+		"--json", "per-command details",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("top-level help missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestUninstallHelpShowsFlags(t *testing.T) {
+	c, stdout, stderr := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	c.ServiceFactory = panicFactory(t) // help must not build a service
+	if code := c.Run(context.Background(), []string{"uninstall", "--help"}); code != 0 {
+		t.Errorf("exit = %d", code)
+	}
+	out := stdout.String()
+	for _, want := range []string{"--force", "--previous", "--purge-logs", "Usage:", "Flags:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("uninstall help missing %q:\n%s", want, out)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("help output must go to stdout, stderr = %q", stderr.String())
+	}
+}
+
+func TestHelpSubcommandMirrorsCommandHelp(t *testing.T) {
+	c, stdout, _ := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	if code := c.Run(context.Background(), []string{"help", "uninstall"}); code != 0 {
+		t.Errorf("exit = %d", code)
+	}
+	if !strings.Contains(stdout.String(), "--purge-tools") {
+		t.Errorf("help uninstall output:\n%s", stdout.String())
+	}
+}
+
+func TestUnknownFlagPrintsUsageOnStderr(t *testing.T) {
+	c, stdout, stderr := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	c.ServiceFactory = panicFactory(t)
+	if code := c.Run(context.Background(), []string{"uninstall", "--oops"}); code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("usage for errors belongs on stderr; stdout = %q", stdout.String())
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, "-oops") || !strings.Contains(errOut, "--force") {
+		t.Errorf("stderr = %q, want error + usage", errOut)
+	}
+	// The duplicated FlagSet-native help must not leak into stderr.
+	if strings.Contains(errOut, "Usage of uninstall:") {
+		t.Errorf("flag's automatic help duplicated on stderr:\n%s", errOut)
+	}
+}
+
+func TestEmptyArgsShowFullUsageWithFlags(t *testing.T) {
+	c, stdout, _ := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	if code := c.Run(context.Background(), nil); code != 0 {
+		t.Errorf("exit = %d", code)
+	}
+	if !strings.Contains(stdout.String(), "--purge-skia") {
+		t.Errorf("empty-args usage must show flags too:\n%s", stdout.String())
+	}
+}
+
+// CLI help renders every flag exactly once per command listing.
+func TestFlagLinesRenderDefaults(t *testing.T) {
+	fs, _ := uninstallFlags()
+	lines := flagLines(fs)
+	if len(lines) != 6 {
+		t.Fatalf("lines = %d:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.HasPrefix(lines[0], "--force") || !strings.Contains(lines[0], "prove it installed") {
+		t.Errorf("line0 = %q", lines[0])
+	}
+	// Booleans render without a type suffix.
+	if strings.Contains(lines[1], "bool") {
+		t.Errorf("bool flag line should not carry a type: %q", lines[1])
+	}
+}

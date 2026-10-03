@@ -13,6 +13,7 @@ import (
 	"io"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aseprite-builder/aseprite-builder/internal/app"
 	"github.com/aseprite-builder/aseprite-builder/internal/aseprite"
@@ -43,7 +44,7 @@ type CLI struct {
 // Run dispatches os.Args. It returns the process exit code.
 func (c *CLI) Run(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		c.printOverview()
+		c.printUsage(c.Stdout)
 		return 0
 	}
 	switch args[0] {
@@ -52,9 +53,9 @@ func (c *CLI) Run(ctx context.Context, args []string) int {
 	case "update":
 		return c.cmdUpdate(ctx, args[1:])
 	case "launch":
-		return c.cmdLaunch(ctx)
+		return c.cmdLaunch(ctx, args[1:])
 	case "repair":
-		return c.cmdRepair(ctx)
+		return c.cmdRepair(ctx, args[1:])
 	case "rebuild":
 		return c.cmdRebuild(ctx, args[1:])
 	case "uninstall":
@@ -62,45 +63,98 @@ func (c *CLI) Run(ctx context.Context, args []string) int {
 	case "doctor":
 		return c.cmdDoctor(ctx, args[1:])
 	case "version", "-v", "--version":
-		return c.cmdVersion()
+		return c.cmdVersion(args[1:])
 	case "help", "-h", "--help":
-		c.printUsage()
+		// `aseprite-builder help <cmd>` and `aseprite-builder -h` both
+		// work; bare help prints the full top-level table.
+		if len(args) > 1 && c.helpCommand(ctx, args[1], args[2:]) {
+			return 0
+		}
+		c.printUsage(c.Stdout)
 		return 0
 	default:
 		fmt.Fprintf(c.Stderr, "unknown command %q\n\n", args[0])
-		c.printUsage()
+		c.printUsage(c.Stderr)
 		return int(exitCode(2))
 	}
 }
 
-// Setup wires the concrete application service for command execution.
-
-func (c *CLI) printOverview() {
-	c.printUsage()
+// helpCommand handles `help <command> [args]` by delegating to the
+// command's own flag help. Returns false when the subcommand is
+// unknown (printing a hint is the caller's job).
+func (c *CLI) helpCommand(ctx context.Context, name string, args []string) bool {
+	fs, known := commandFlagSet(name)
+	if !known {
+		fmt.Fprintf(c.Stderr, "unknown command %q\n", name)
+		return false
+	}
+	_ = ctx
+	// parseArgs short-circuits on the help flag inside args; without a
+	// help flag in args, print the same help anyway.
+	printCommandHelp(fs, name, c.Stdout)
+	return true
 }
 
-func (c *CLI) printUsage() {
-	fmt.Fprint(c.Stdout, `aseprite-builder — build and install Aseprite from official source
+// commandFlagSet returns a disposable FlagSet for name (used by the
+// `help <command>` dispatcher and the top-level usage table). It
+// reports unknown=false for names without flag plumbing.
+func commandFlagSet(name string) (*flag.FlagSet, bool) {
+	switch name {
+	case "install":
+		fs, _ := installFlags()
+		return fs, true
+	case "update":
+		fs, _ := updateFlags()
+		return fs, true
+	case "rebuild":
+		fs, _ := rebuildFlags()
+		return fs, true
+	case "uninstall":
+		fs, _ := uninstallFlags()
+		return fs, true
+	case "doctor":
+		fs, _ := doctorFlags()
+		return fs, true
+	case "launch", "repair", "version":
+		return plainFlags(name), true
+	default:
+		return nil, false
+	}
+}
+
+// printUsage renders the top-level help to w: every command with its
+// flags inline, generated from the same FlagSet definitions the
+// commands parse — the listing cannot drift from behavior.
+func (c *CLI) printUsage(w io.Writer) {
+	fmt.Fprint(w, `aseprite-builder — build and install Aseprite from official source
 
 Unofficial third-party tool. Aseprite is a project of Igara Studio S.A.;
 this tool does not redistribute Aseprite and compiles it locally.
 
 Usage:
+  aseprite-builder <command> [flags]
 
-  aseprite-builder <command> [options]
-
-Commands:
-
-  install     Build and install the latest stable Aseprite
-  update      Update to the latest stable Aseprite (transactional)
-  rebuild     Rebuild the installed Aseprite version
-  launch      Launch the installed Aseprite
-  repair      Check the installation and rebuild if broken
-  uninstall   Remove the builder-installed Aseprite
-  doctor      Diagnose your system and installation
-  version     Show version information
-
-Run "aseprite-builder <command> -h" for command options.
+Commands and flags:
+`)
+	names := []string{"install", "update", "rebuild", "launch", "repair", "uninstall", "doctor", "version"}
+	width := 0
+	for _, n := range names {
+		if l := utf8.RuneCountInString(n); l > width {
+			width = l
+		}
+	}
+	for _, n := range names {
+		fmt.Fprintf(w, "  %s  %s\n", padTo(n, width), commandSummaries[n])
+		fs, known := commandFlagSet(n)
+		if !known {
+			continue
+		}
+		for _, line := range flagLines(fs) {
+			fmt.Fprintf(w, "        %s\n", line)
+		}
+	}
+	fmt.Fprint(w, `
+Run "aseprite-builder <command> --help" for per-command details.
 `)
 }
 
@@ -234,16 +288,9 @@ func firstLine(s string) string {
 
 // cmdInstall implements `aseprite-builder install`.
 func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("install", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	ver := fs.String("version", "", "pin an exact Aseprite version (e.g. 1.3.18.6)")
-	yes := fs.Bool("yes", false, "do not ask for confirmation")
-	force := fs.Bool("force", false, "replace an existing Aseprite.app even if this tool did not install it")
-	launch := fs.Bool("launch", false, "launch Aseprite after a successful install")
-	keepWS := fs.Bool("keep-workspace", false, "keep the build workspace for repair/rebuild")
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(c.Stderr, "install: %v\n", err)
-		return int(exitCode(2))
+	fs, v := installFlags()
+	if code, ok := parseArgs("install", fs, args, c.Stdout, c.Stderr); !ok {
+		return code
 	}
 
 	svc, err := c.serviceFor(ctx, true)
@@ -255,13 +302,13 @@ func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
 	fmt.Fprintln(c.Stderr, strings.TrimSpace(licenseNotice))
 
 	opts := app.InstallOptions{
-		Version:               strings.TrimSpace(*ver),
+		Version:               strings.TrimSpace(*v.Version),
 		Channel:               aseprite.ChannelStable,
-		ForceOverwriteUnowned: *force,
-		LaunchAfterInstall:    *launch,
-		KeepWorkspace:         *keepWS,
+		ForceOverwriteUnowned: *v.Force,
+		LaunchAfterInstall:    *v.Launch,
+		KeepWorkspace:         *v.KeepWorkspace,
 	}
-	if !*yes && !c.confirm("Continue and download the official Aseprite source?") {
+	if !*v.Yes && !c.confirm("Continue and download the official Aseprite source?") {
 		fmt.Fprintln(c.Stderr, "install cancelled; nothing was changed")
 		return int(exitCode(1))
 	}
