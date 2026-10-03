@@ -1,0 +1,35 @@
+# Repository hygiene: never commit runtime downloads or build output.
+# The zero-vendored-toolchain principle (docs/PROJECT_SPEC.md §3): the
+# repository stays source-oriented.
+
+# Compiled aseprite-builder output
+/aseprite-builder
+/dist/
+
+# Generated Aseprite build/install artifacts (must never exist in-repo)
+/data
+/bin
+Aseprite.app/
+Aseprite*.exe
+Aseprite-v*-Source.zip
+Skia-*.zip
+cmake-*.tar.gz
+ninja-*.zip
+
+# Aseprite build trees that could accidentally appear next to the repo
+build/
+.cache/
+tmp/
+downloads/
+toolchains/
+skia/
+vendor-bin/
+
+# Go
+*.test
+*.out
+coverage.txt
+
+# Editors / OS
+.DS_Store
+*.swp
