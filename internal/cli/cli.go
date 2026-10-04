@@ -254,13 +254,28 @@ func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
 		}
 		channel = ch
 	}
+	toolPref := strings.ToLower(strings.TrimSpace(*v.ToolPreference))
+	if toolPref != "" && toolPref != "system" && toolPref != "cached" {
+		fmt.Fprintf(c.Stderr, "invalid tool preference %q: use \"system\" or \"cached\"\n", *v.ToolPreference)
+		return int(exitCode(2))
+	}
 	opts := app.InstallOptions{
 		Version:               strings.TrimSpace(*v.Version),
 		Channel:               channel,
 		ForceOverwriteUnowned: *v.Force,
 		LaunchAfterInstall:    *v.Launch,
 		KeepWorkspace:         *v.KeepWorkspace,
+		KeepSources:           *v.KeepSources,
+		InstallDir:            strings.TrimSpace(*v.InstallDir),
+		ToolPreference:        toolPref,
 	}
+	// --retain-builds defaults to true; only an explicit flag overrides
+	// the persisted preference (so config can disable it).
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "retain-builds" {
+			opts.RetainBuilds = v.RetainBuilds
+		}
+	})
 	if !*v.Yes && !c.confirm("Continue and download the official Aseprite source?") {
 		fmt.Fprintln(c.Stderr, "install cancelled; nothing was changed")
 		return int(exitCode(1))

@@ -73,6 +73,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorReport, error) {
 		cmakeFetcher = dependencies.NewLinuxCMakeFetcher(s.opts.Layout, nil)
 		ninjaFetcher = dependencies.NewLinuxNinjaFetcher(s.opts.Layout, nil)
 	}
+	cfg := s.runConfig()
 	resolver := &dependencies.Resolver{
 		Runner: s.opts.Runner,
 		Layout: s.opts.Layout,
@@ -84,6 +85,8 @@ func (s *Service) Doctor(ctx context.Context) (DoctorReport, error) {
 			"cmake": minCForDoctor(),
 			"ninja": {}, // any version
 		},
+		// Report the same reuse order install would take.
+		PreferCached: normalizeToolPreference(cfg.ToolPreference) == "cached",
 	}
 	for _, name := range []string{"cmake", "ninja"} {
 		c, err := resolver.Check(ctx, name)

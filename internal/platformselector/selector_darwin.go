@@ -22,5 +22,5 @@ func newDarwinPlatform(builderVersion string) (platform.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("darwin platform: %w", err)
 	}
-	return p, nil
+	return &p, nil
 }

@@ -109,6 +109,16 @@ func (p Platform) Install(ctx context.Context, out platform.BuildOutput) (platfo
 	}
 	activated = true
 
+	if p.DisableRetention {
+		// The replacement is live; drop the retained copy now. It is
+		// never dropped before activation, so a failed activation still
+		// rolls back (spec §23).
+		if err := os.RemoveAll(retention); err != nil {
+			return platform.InstallOutcome{}, fmt.Errorf("discard previous retention: %w", err)
+		}
+		previous = ""
+	}
+
 	if err := os.RemoveAll(stagingRoot); err != nil {
 		return platform.InstallOutcome{}, fmt.Errorf("clean staging dir: %w", err)
 	}

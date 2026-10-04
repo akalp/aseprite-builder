@@ -119,6 +119,22 @@ type InstalledExecutableProvider interface {
 	InstalledExecutable() (string, error)
 }
 
+// InstallRootSetter is an optional Platform capability for the
+// advanced custom install path (spec §41): the platform validates and
+// applies an installation-root override; subsequent
+// install/uninstall/DefaultInstallPath operations live under it.
+type InstallRootSetter interface {
+	SetInstallRoot(root string) error
+}
+
+// RetentionSetter is an optional Platform capability for the advanced
+// build-retention option (spec §24/§41): retaining the replaced
+// installation is the default; SetRetainPrevious(false) discards it
+// only after the replacement has activated.
+type RetentionSetter interface {
+	SetRetainPrevious(retain bool)
+}
+
 // CurrentArch maps runtime architecture to the builder's canonical
 // naming (amd64 → amd64 etc.). Only a convenience for Detect
 // implementations.

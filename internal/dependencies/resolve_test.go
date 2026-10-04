@@ -172,6 +172,99 @@ func TestResolveRejectsOldSystemToolAndDownloads(t *testing.T) {
 	}
 }
 
+// materializeCachedCMake creates a cached 4.1.2 cmake distribution
+// under the layout and returns the binary path.
+func materializeCachedCMake(t *testing.T, layout paths.Layout) string {
+	t.Helper()
+	bin := filepath.Join(layout.Tools, "cmake", "official", "4.1.2", "CMake.app", "Contents", "bin", "cmake")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("stub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+func TestResolvePreferCachedUsesCacheOverSystem(t *testing.T) {
+	layout := testLayout(t)
+	cachedBin := materializeCachedCMake(t, layout)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if len(c.Args) == 1 && c.Args[0] == "--version" && strings.HasSuffix(c.Name, "cmake") {
+			if strings.Contains(c.Name, "4.1.2") {
+				return runner.Result{Stdout: "cmake version 4.1.2\n"}, true
+			}
+			return runner.Result{Stdout: "cmake version 3.31.6\n"}, true
+		}
+		return runner.Result{}, false
+	}}
+	fetchCalled := false
+	res := &Resolver{
+		Runner:       r,
+		Layout:       layout,
+		PreferCached: true,
+		Fetchers: map[string]Fetcher{"cmake": fetchFunc(func(context.Context) (Tool, error) {
+			fetchCalled = true
+			return Tool{}, errors.New("must not fetch")
+		})},
+		MinVersions: map[string]version.Version{"cmake": minCMake("3.20")},
+	}
+	tool, err := res.Resolve(context.Background(), "cmake")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if tool.Source != "cache" || tool.Version.String() != "4.1.2" || tool.Path != cachedBin {
+		t.Errorf("tool = %+v, want the cached 4.1.2 distribution", tool)
+	}
+	if fetchCalled {
+		t.Error("no download may run when the cache satisfies")
+	}
+	// System-first stays the default: the bare-name probe would have run
+	// before the cache probe otherwise.
+	for _, c := range r.Called() {
+		if c.Name == "cmake" {
+			t.Errorf("system tool must not be probed when the preferred cache satisfies: %v", c)
+		}
+	}
+}
+
+func TestCheckPreferCachedReportsCache(t *testing.T) {
+	layout := testLayout(t)
+	cachedBin := materializeCachedCMake(t, layout)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if len(c.Args) == 1 && c.Args[0] == "--version" && strings.HasSuffix(c.Name, "cmake") {
+			if strings.Contains(c.Name, "4.1.2") {
+				return runner.Result{Stdout: "cmake version 4.1.2\n"}, true
+			}
+			return runner.Result{Stdout: "cmake version 3.31.6\n"}, true
+		}
+		return runner.Result{}, false
+	}}
+	res := &Resolver{
+		Runner:       r,
+		Layout:       layout,
+		PreferCached: true,
+		MinVersions:  map[string]version.Version{"cmake": minCMake("3.20")},
+	}
+	c, err := res.Check(context.Background(), "cmake")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if c.Status != "cache" || c.Version.String() != "4.1.2" || c.Detail != cachedBin {
+		t.Errorf("check = %+v, want the cached distribution", c)
+	}
+
+	// With the default preference the same setup reports the system tool.
+	res.PreferCached = false
+	c, err = res.Check(context.Background(), "cmake")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if c.Status != "system" || c.Version.String() != "3.31.6" {
+		t.Errorf("check = %+v, want the system tool by default", c)
+	}
+}
+
 func TestResolveSkipsBrokenCacheEntries(t *testing.T) {
 	// System cmake is present but TOO OLD (so it must be skipped); the
 	// cached distribution is present but its probe fails (broken).

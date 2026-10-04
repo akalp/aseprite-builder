@@ -389,15 +389,41 @@ func (m *Model) viewSettings() string {
 			labels = append(labels, toggleLabel(it.label, m.cfg.Verbose))
 		case "Release channel":
 			labels = append(labels, "Release channel: "+channelLabel(m.channelPref()))
+		case "Install directory":
+			labels = append(labels, "Install directory: "+installDirLabel(m.cfg.InstallDir))
+		case "Keep old source trees":
+			labels = append(labels, toggleLabel(it.label, m.cfg.KeepSources))
+		case "Keep previous build (rollback)":
+			labels = append(labels, toggleLabel(it.label, m.cfg.RetainBuilds))
+		case "Prefer cached build tools":
+			labels = append(labels, toggleLabel(it.label, strings.EqualFold(m.cfg.ToolPreference, "cached")))
 		default:
 			labels = append(labels, it.label)
 		}
 	}
-	return lipglossJoin([]string{
+	lines := []string{
 		headingStyle.Render("Settings"),
 		"",
 		menu(labels, m.cfgIdx),
-	})
+	}
+	if m.cfgEdit {
+		lines = append(lines, "",
+			"Install directory (absolute path, empty = platform default):",
+			inputStyle.Render("> "+m.cfgEditVal+"_"),
+			"enter: save · esc: cancel")
+		if m.cfgEditErr != "" {
+			lines = append(lines, failStyle.Render(m.cfgEditErr))
+		}
+	}
+	return lipglossJoin(lines)
+}
+
+// installDirLabel renders the custom install directory or its default.
+func installDirLabel(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return "platform default"
+	}
+	return dir
 }
 
 // --- advanced --------------------------------------------------------------

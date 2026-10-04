@@ -23,5 +23,5 @@ func newWindowsPlatform(builderVersion string) (platform.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("windows platform: %w", err)
 	}
-	return p, nil
+	return &p, nil
 }

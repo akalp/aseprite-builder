@@ -9,6 +9,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -184,6 +185,9 @@ type Model struct {
 	cfgLoading bool
 	cfgItems   []menuItem
 	cfgIdx     int
+	cfgEdit    bool   // install-directory text entry active
+	cfgEditVal string // its current text
+	cfgEditErr string // local validation hint
 
 	// Advanced.
 	advIdx    int
@@ -501,6 +505,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case scrSettings:
+		if m.cfgEdit {
+			return m.handleCfgEditKey(msg)
+		}
 		switch key {
 		case "up", "k":
 			if m.cfgIdx > 0 {
@@ -885,10 +892,65 @@ func (m *Model) buildSettingsItems() []menuItem {
 			m.cfg.Channel = string(next)
 			return m.saveConfigCmd(m.cfg)
 		}},
+		{label: "Install directory", run: func(m *Model) tea.Cmd {
+			m.cfgEdit = true
+			m.cfgEditVal = m.cfg.InstallDir
+			m.cfgEditErr = ""
+			return nil
+		}},
+		{label: "Keep old source trees", run: func(m *Model) tea.Cmd {
+			m.cfg.KeepSources = !m.cfg.KeepSources
+			return m.saveConfigCmd(m.cfg)
+		}},
+		{label: "Keep previous build (rollback)", run: func(m *Model) tea.Cmd {
+			m.cfg.RetainBuilds = !m.cfg.RetainBuilds
+			return m.saveConfigCmd(m.cfg)
+		}},
+		{label: "Prefer cached build tools", run: func(m *Model) tea.Cmd {
+			if strings.EqualFold(strings.TrimSpace(m.cfg.ToolPreference), "cached") {
+				m.cfg.ToolPreference = "system"
+			} else {
+				m.cfg.ToolPreference = "cached"
+			}
+			return m.saveConfigCmd(m.cfg)
+		}},
 		{label: "Back", run: func(m *Model) tea.Cmd {
 			m.screen = scrHome
 			return m.refreshHomeCmd()
 		}},
+	}
+}
+
+// handleCfgEditKey drives the install-directory text entry in the
+// settings screen. Only absolute paths are accepted; an empty value
+// restores the platform default.
+func (m *Model) handleCfgEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		v := strings.TrimSpace(m.cfgEditVal)
+		if v != "" && !filepath.IsAbs(v) {
+			m.cfgEditErr = "Enter an absolute path, or leave empty for the platform default."
+			return m, nil
+		}
+		m.cfgEdit = false
+		m.cfgEditErr = ""
+		m.cfg.InstallDir = v
+		return m, m.saveConfigCmd(m.cfg)
+	case "esc":
+		m.cfgEdit = false
+		m.cfgEditErr = ""
+		return m, nil
+	case "backspace":
+		if m.cfgEditVal != "" {
+			r := []rune(m.cfgEditVal)
+			m.cfgEditVal = string(r[:len(r)-1])
+		}
+		return m, nil
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.cfgEditVal += string(msg.Runes)
+		}
+		return m, nil
 	}
 }
 

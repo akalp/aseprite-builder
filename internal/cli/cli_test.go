@@ -25,6 +25,8 @@ type cliFakePlatform struct {
 	failRequirements    bool
 	installed           string
 	allowReplaceUnowned bool
+	installRoot         string
+	disableRetention    bool
 }
 
 func (f *cliFakePlatform) Detect(context.Context) (platform.SystemInfo, error) {
@@ -56,6 +58,15 @@ func (f *cliFakePlatform) InstalledVersion(context.Context) (string, error) { re
 func (f *cliFakePlatform) DefaultInstallPath() string { return "/fake/Applications/Aseprite.app" }
 
 func (f *cliFakePlatform) SetAllowReplaceUnowned(v bool) { f.allowReplaceUnowned = v }
+
+// SetInstallRoot implements platform.InstallRootSetter.
+func (f *cliFakePlatform) SetInstallRoot(root string) error {
+	f.installRoot = root
+	return nil
+}
+
+// SetRetainPrevious implements platform.RetentionSetter.
+func (f *cliFakePlatform) SetRetainPrevious(retain bool) { f.disableRetention = !retain }
 
 // cliFakeReleases serves no releases or one pinned release.
 type cliFakeReleases struct{ releases []aseprite.Release }
@@ -222,6 +233,42 @@ func TestInstallDevChannelRequiresCommit(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--channel dev --version") {
 		t.Errorf("stderr = %q, want the explicit-commit guidance", stderr.String())
+	}
+}
+
+func TestInstallRejectsBadToolPreference(t *testing.T) {
+	c, _, stderr := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	code := c.Run(context.Background(), []string{"install", "--yes", "--tool-preference", "nonsense"})
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "invalid tool preference") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+func TestInstallAdvancedFlagsReachPlatform(t *testing.T) {
+	plat := &cliFakePlatform{}
+	c, _, _ := newFakeCLI(t, newCLITestService(t, plat))
+	custom := filepath.Join(t.TempDir(), "custom-apps")
+
+	// The harness serves no releases, so the pipeline fails after the
+	// preferences were applied — which is exactly what we assert.
+	code := c.Run(context.Background(), []string{
+		"install", "--yes",
+		"--install-dir", custom,
+		"--retain-builds=false",
+		"--keep-sources",
+		"--tool-preference", "cached",
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (no releases in the harness)", code)
+	}
+	if plat.installRoot != custom {
+		t.Errorf("platform install root = %q, want %q", plat.installRoot, custom)
+	}
+	if !plat.disableRetention {
+		t.Error("--retain-builds=false must reach the platform")
 	}
 }
 

@@ -23,5 +23,5 @@ func newLinuxPlatform(builderVersion string) (platform.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("linux platform: %w", err)
 	}
-	return p, nil
+	return &p, nil
 }

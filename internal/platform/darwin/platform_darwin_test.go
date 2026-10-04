@@ -142,6 +142,78 @@ func TestRequirementsMissingToolchain(t *testing.T) {
 	}
 }
 
+func TestInstallRootOverride(t *testing.T) {
+	p := Platform{}
+	if err := p.SetInstallRoot("relative/path"); err == nil {
+		t.Error("a relative install dir must be rejected")
+	}
+	if err := p.SetInstallRoot("   "); err == nil {
+		t.Error("an empty install dir must be rejected")
+	}
+	custom := filepath.Join(t.TempDir(), "custom-apps")
+	if err := p.SetInstallRoot(custom); err != nil {
+		t.Fatalf("SetInstallRoot: %v", err)
+	}
+	if got := p.DefaultInstallPath(); got != filepath.Join(custom, appBundleName) {
+		t.Errorf("DefaultInstallPath = %q, want under %q", got, custom)
+	}
+}
+
+func TestInstallWithRetentionDisabled(t *testing.T) {
+	dir := t.TempDir()
+	f := fakeVersionRunner("1.3.18.6")
+	p := newTestPlatform(t, f)
+	p.InstallRoot = filepath.Join(dir, "Applications")
+	p.SetRetainPrevious(false)
+
+	built := fakeApp(t, filepath.Join(dir, "build-1"), "1.3.18.6")
+	if _, err := p.Install(context.Background(), platform.BuildOutput{Version: "1.3.18.6", AppPath: built}); err != nil {
+		t.Fatalf("first Install: %v", err)
+	}
+
+	f.Match = versionFaker("1.3.18.7")
+	built2 := fakeApp(t, filepath.Join(dir, "build-2"), "1.3.18.7")
+	outcome, err := p.Install(context.Background(), platform.BuildOutput{Version: "1.3.18.7", AppPath: built2})
+	if err != nil {
+		t.Fatalf("second Install: %v", err)
+	}
+	if outcome.PreviousPath != "" {
+		t.Errorf("PreviousPath = %q, want none when retention is disabled", outcome.PreviousPath)
+	}
+	if _, err := os.Stat(filepath.Join(p.InstallRoot, retentionDirName, "previous")); !os.IsNotExist(err) {
+		t.Errorf("retained previous must be gone, stat err = %v", err)
+	}
+	m, err := readMarker(p.DefaultInstallPath())
+	if err != nil || m.Version != "1.3.18.7" {
+		t.Errorf("installed marker = %+v, err = %v", m, err)
+	}
+}
+
+func TestInstallRetainsPreviousByDefault(t *testing.T) {
+	dir := t.TempDir()
+	f := fakeVersionRunner("1.3.18.6")
+	p := newTestPlatform(t, f)
+	p.InstallRoot = filepath.Join(dir, "Applications")
+
+	built := fakeApp(t, filepath.Join(dir, "build-1"), "1.3.18.6")
+	if _, err := p.Install(context.Background(), platform.BuildOutput{Version: "1.3.18.6", AppPath: built}); err != nil {
+		t.Fatalf("first Install: %v", err)
+	}
+	f.Match = versionFaker("1.3.18.7")
+	built2 := fakeApp(t, filepath.Join(dir, "build-2"), "1.3.18.7")
+	outcome, err := p.Install(context.Background(), platform.BuildOutput{Version: "1.3.18.7", AppPath: built2})
+	if err != nil {
+		t.Fatalf("second Install: %v", err)
+	}
+	if outcome.PreviousPath == "" {
+		t.Fatal("the default must retain the replaced installation for rollback")
+	}
+	m, err := readMarker(outcome.PreviousPath)
+	if err != nil || m.Version != "1.3.18.6" {
+		t.Errorf("retained marker = %+v, err = %v", m, err)
+	}
+}
+
 func TestInstallFresh(t *testing.T) {
 	dir := t.TempDir()
 	f := fakeVersionRunner("1.3.18.6")

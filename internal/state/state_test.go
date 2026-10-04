@@ -25,7 +25,13 @@ func TestLoadConfigDefaults(t *testing.T) {
 func TestConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := Store{Dir: dir}
-	cfg := Config{Channel: "stable", KeepWorkspace: true, Verbose: true}
+	cfg := DefaultConfig()
+	cfg.KeepWorkspace = true
+	cfg.Verbose = true
+	cfg.InstallDir = filepath.Join(dir, "custom apps")
+	cfg.KeepSources = true
+	cfg.ToolPreference = "cached"
+	cfg.RetainBuilds = false
 	if err := s.SaveConfig(cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
@@ -35,6 +41,16 @@ func TestConfigRoundTrip(t *testing.T) {
 	}
 	if got != cfg {
 		t.Errorf("config = %+v, want %+v", got, cfg)
+	}
+}
+
+func TestDefaultConfigDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Channel != "stable" || cfg.ToolPreference != "system" || !cfg.RetainBuilds {
+		t.Errorf("defaults = %+v, want stable/system-first/retain", cfg)
+	}
+	if cfg.InstallDir != "" || cfg.KeepSources {
+		t.Errorf("defaults = %+v, want no install-dir override and no source retention", cfg)
 	}
 }
 

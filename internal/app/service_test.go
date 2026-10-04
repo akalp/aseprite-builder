@@ -25,10 +25,12 @@ import (
 // fakePlatform implements platform.Platform for service tests without
 // touching the real OS.
 type fakePlatform struct {
-	allowUnowned bool
-	installed    string // version marker
-	failInstall  bool
-	launchCalls  int
+	allowUnowned     bool
+	installed        string // version marker
+	failInstall      bool
+	launchCalls      int
+	installRoot      string // custom install root override ("" → default)
+	disableRetention bool
 }
 
 func (f *fakePlatform) Detect(context.Context) (platform.SystemInfo, error) {
@@ -49,7 +51,7 @@ func (f *fakePlatform) Install(_ context.Context, out platform.BuildOutput) (pla
 		return platform.InstallOutcome{}, errors.New("simulated install failure")
 	}
 	f.installed = out.Version
-	return platform.InstallOutcome{AppPath: out.AppPath}, nil
+	return platform.InstallOutcome{AppPath: f.DefaultInstallPath()}, nil
 }
 
 func (f *fakePlatform) Launch(context.Context) error { f.launchCalls++; return nil }
@@ -58,9 +60,27 @@ func (f *fakePlatform) Uninstall(context.Context, platform.UninstallOptions) err
 
 func (f *fakePlatform) InstalledVersion(context.Context) (string, error) { return f.installed, nil }
 
-func (f *fakePlatform) DefaultInstallPath() string { return "/fake/Applications/Aseprite.app" }
+func (f *fakePlatform) DefaultInstallPath() string {
+	root := f.installRoot
+	if root == "" {
+		root = "/fake/Applications"
+	}
+	return filepath.Join(root, "Aseprite.app")
+}
 
 func (f *fakePlatform) SetAllowReplaceUnowned(v bool) { f.allowUnowned = v }
+
+// SetInstallRoot implements platform.InstallRootSetter.
+func (f *fakePlatform) SetInstallRoot(root string) error {
+	if root == "" || !filepath.IsAbs(root) {
+		return errors.New("install directory must be an absolute path")
+	}
+	f.installRoot = root
+	return nil
+}
+
+// SetRetainPrevious implements platform.RetentionSetter.
+func (f *fakePlatform) SetRetainPrevious(retain bool) { f.disableRetention = !retain }
 
 // fakeReleases serves a fixed release list.
 type fakeReleases struct {

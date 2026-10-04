@@ -58,6 +58,10 @@ type Platform struct {
 	// AllowReplaceUnowned lets install overwrite an existing Aseprite.app
 	// the builder cannot prove it owns. The user must opt in explicitly.
 	AllowReplaceUnowned bool
+	// DisableRetention drops the replaced installation after the new one
+	// activates instead of keeping it for rollback (advanced option,
+	// spec §24/§41). The zero value retains, preserving the default.
+	DisableRetention bool
 	// Logger receives non-fatal operational notes (nil disables).
 	Logger warningLogger
 	// Now overrides wall-clock time in tests.
@@ -95,6 +99,22 @@ func New(r runner.Runner, builderVersion string) (Platform, error) {
 // app service uses when the user explicitly authorizes replacing an
 // existing bundle the builder cannot prove it owns.
 func (p *Platform) SetAllowReplaceUnowned(v bool) { p.AllowReplaceUnowned = v }
+
+// SetInstallRoot implements platform.InstallRootSetter: the advanced
+// custom install directory (spec §41). Only an absolute path is
+// accepted; the platform creates it during install.
+func (p *Platform) SetInstallRoot(root string) error {
+	root = strings.TrimSpace(root)
+	if root == "" || !filepath.IsAbs(root) {
+		return fmt.Errorf("install directory must be an absolute path: %q", root)
+	}
+	p.InstallRoot = root
+	return nil
+}
+
+// SetRetainPrevious implements platform.RetentionSetter. Retaining the
+// replaced installation is the default (spec §24).
+func (p *Platform) SetRetainPrevious(retain bool) { p.DisableRetention = !retain }
 
 // Detect reports the macOS version and architecture.
 func (p Platform) Detect(_ context.Context) (platform.SystemInfo, error) {
@@ -314,6 +334,16 @@ func (p Platform) Install(ctx context.Context, out platform.BuildOutput) (platfo
 		return platform.InstallOutcome{}, fmt.Errorf("activate installation: %w", err)
 	}
 	activated = true
+
+	if p.DisableRetention {
+		// The replacement is live; drop the retained copy now. It is
+		// never dropped before activation, so a failed activation still
+		// rolls back (spec §23).
+		if err := os.RemoveAll(retention); err != nil {
+			return platform.InstallOutcome{}, fmt.Errorf("discard previous retention: %w", err)
+		}
+		previous = ""
+	}
 
 	if err := os.RemoveAll(stagingRoot); err != nil {
 		return platform.InstallOutcome{}, fmt.Errorf("clean staging dir: %w", err)

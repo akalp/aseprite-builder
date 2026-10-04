@@ -49,7 +49,7 @@ type InstallState struct {
 // Config holds user preferences. Defaults are conservative; only a few
 // options exist so the tool stays simple.
 type Config struct {
-	// Channel for new installs. "stable" only for now.
+	// Channel for new installs: "stable" (default) or "dev".
 	Channel string `json:"channel"`
 	// KeepWorkspace retains build workspaces after a successful install
 	// (useful for repair/rebuild); false cleans heavy artifacts.
@@ -59,11 +59,26 @@ type Config struct {
 	// NoticeAcknowledged records that the user dismissed the §7
 	// licensing notice, so the TUI welcome screen is shown once.
 	NoticeAcknowledged bool `json:"notice_acknowledged,omitempty"`
+	// InstallDir overrides the platform's default installation root
+	// ("" uses the platform default).
+	InstallDir string `json:"install_dir,omitempty"`
+	// KeepSources retains older source trees instead of pruning them to
+	// the active and previous generation. The active tree is always
+	// kept for repair/rebuild.
+	KeepSources bool `json:"keep_sources,omitempty"`
+	// ToolPreference selects which reuse source wins before downloading:
+	// "system" (default) prefers a compatible system tool; "cached"
+	// prefers the builder's own downloaded cache.
+	ToolPreference string `json:"tool_preference,omitempty"`
+	// RetainBuilds keeps the replaced installation after updates for
+	// rollback (spec §24). Default true; no omitempty so an explicit
+	// false persists.
+	RetainBuilds bool `json:"retain_builds"`
 }
 
 // DefaultConfig returns the zero-configuration defaults.
 func DefaultConfig() Config {
-	return Config{Channel: "stable", KeepWorkspace: false, Verbose: false}
+	return Config{Channel: "stable", KeepWorkspace: false, Verbose: false, ToolPreference: "system", RetainBuilds: true}
 }
 
 // Store persists state and config JSON files in dir. It never overwrites

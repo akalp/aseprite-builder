@@ -443,6 +443,51 @@ func TestInstallLifecycleRetentionAndIntegration(t *testing.T) {
 	}
 }
 
+func TestInstallRootOverride(t *testing.T) {
+	p := Platform{}
+	if err := p.SetInstallRoot("relative/opt"); err == nil {
+		t.Error("a relative install dir must be rejected")
+	}
+	if err := p.SetInstallRoot("   "); err == nil {
+		t.Error("an empty install dir must be rejected")
+	}
+	custom := filepath.Join(t.TempDir(), "custom-opt")
+	if err := p.SetInstallRoot(custom); err != nil {
+		t.Fatalf("SetInstallRoot: %v", err)
+	}
+	if got := p.DefaultInstallPath(); got != filepath.Join(custom, installDirName) {
+		t.Errorf("DefaultInstallPath = %q, want under %q", got, custom)
+	}
+}
+
+func TestInstallWithRetentionDisabled(t *testing.T) {
+	f := &runner.FakeRunner{Match: versionFaker("1.3.18.6")}
+	p := newTestPlatform(t, f)
+	p.SetRetainPrevious(false)
+
+	out := fakeInstallPayload(t, t.TempDir(), "1.3.18.6")
+	if _, err := p.Install(context.Background(), out); err != nil {
+		t.Fatalf("first Install: %v", err)
+	}
+
+	p.Runner = &runner.FakeRunner{Match: versionFaker("1.3.18.7")}
+	out2 := fakeInstallPayload(t, t.TempDir(), "1.3.18.7")
+	res, err := p.Install(context.Background(), out2)
+	if err != nil {
+		t.Fatalf("second Install: %v", err)
+	}
+	if res.PreviousPath != "" {
+		t.Errorf("PreviousPath = %q, want none when retention is disabled", res.PreviousPath)
+	}
+	if _, err := os.Stat(filepath.Join(p.InstallRoot, retentionDirName, "previous")); !os.IsNotExist(err) {
+		t.Errorf("retained previous must be gone, stat err = %v", err)
+	}
+	m, err := readMarker(p.DefaultInstallPath())
+	if err != nil || m.Version != "1.3.18.7" {
+		t.Errorf("installed marker = %+v err = %v", m, err)
+	}
+}
+
 func TestFailedUpdateKeepsPreviousInstallation(t *testing.T) {
 	f := &runner.FakeRunner{Match: versionFaker("1.3.18.6")}
 	p := newTestPlatform(t, f)

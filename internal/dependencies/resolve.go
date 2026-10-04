@@ -28,14 +28,19 @@ type Resolver struct {
 	// MinVersions holds minimum constraints; the app layer fills these
 	// from the Aseprite build contract before resolution.
 	MinVersions map[string]version.Version
+	// PreferCached checks the cached distributions before the system
+	// PATH (advanced tool preference, spec §41). The default is
+	// system-first (spec §4: prefer an already-installed compatible
+	// system tool).
+	PreferCached bool
 }
 
 // Resolve returns a usable tool of the given name.
 //
-//  1. System tool from PATH when compatible (never second-guesses the
-//     user's own installation when it satisfies the discovered
-//     requirement).
-//  2. Newest cached distribution that probes OK and is compatible.
+//  1. The preferred reuse source: the system tool from PATH when
+//     compatible (default), or the newest cached distribution when
+//     PreferCached is set.
+//  2. The other reuse source.
 //  3. Fresh download from the authoritative upstream source.
 //
 // Broken candidates (present but unrunnable or unparseable) are skipped
@@ -45,29 +50,46 @@ func (res *Resolver) Resolve(ctx context.Context, name string) (Tool, error) {
 	min := res.MinVersions[name]
 	var reasons []string
 
-	// 1. System first.
-	sys, found, err := DetectSystemTool(ctx, res.Runner, name)
-	if err != nil {
-		reasons = append(reasons, fmt.Sprintf("system %s unusable: %v", name, err))
-	} else if found {
+	systemCandidate := func() (Tool, bool) {
+		sys, found, err := DetectSystemTool(ctx, res.Runner, name)
+		if err != nil {
+			reasons = append(reasons, fmt.Sprintf("system %s unusable: %v", name, err))
+			return Tool{}, false
+		}
+		if !found {
+			return Tool{}, false
+		}
 		if sys.Version.AtLeast(min) {
-			return sys, nil
+			return sys, true
 		}
 		reasons = append(reasons, fmt.Sprintf("system %s %s is older than required %s", name, sys.Version, min))
+		return Tool{}, false
 	}
 
-	// 2. Cache next: newest version that actually runs.
-	for _, cached := range res.cachedTools(name) {
-		v, err := ProbeCachedTool(ctx, res.Runner, name, cached.Path)
-		if err != nil {
-			reasons = append(reasons, fmt.Sprintf("cached %s at %s unusable: %v", name, cached.Path, err))
-			continue // corrupted or wrong-arch entry: skip it
+	cacheCandidate := func() (Tool, bool) {
+		for _, cached := range res.cachedTools(name) {
+			v, err := ProbeCachedTool(ctx, res.Runner, name, cached.Path)
+			if err != nil {
+				reasons = append(reasons, fmt.Sprintf("cached %s at %s unusable: %v", name, cached.Path, err))
+				continue // corrupted or wrong-arch entry: skip it
+			}
+			if v.AtLeast(min) {
+				cached.Version = v
+				return cached, true
+			}
+			reasons = append(reasons, fmt.Sprintf("cached %s %s is older than required %s", name, v, min))
 		}
-		if v.AtLeast(min) {
-			cached.Version = v
-			return cached, nil
+		return Tool{}, false
+	}
+
+	candidates := []func() (Tool, bool){systemCandidate, cacheCandidate}
+	if res.PreferCached {
+		candidates = []func() (Tool, bool){cacheCandidate, systemCandidate}
+	}
+	for _, candidate := range candidates {
+		if tool, ok := candidate(); ok {
+			return tool, nil
 		}
-		reasons = append(reasons, fmt.Sprintf("cached %s %s is older than required %s", name, v, min))
 	}
 
 	// 3. Download only when neither reuse nor cache can satisfy.
@@ -121,18 +143,38 @@ func (res *Resolver) discardCacheDir(name string, t Tool) {
 
 // Check reports how a tool would be satisfied, without downloading.
 // Used by doctor and the pre-install summary. The returned Check has
-// Status "system", "cache", "download" or "none".
+// Status "system", "cache", "download" or "none". The reuse ordering
+// follows PreferCached so the report matches what install would do.
 func (res *Resolver) Check(ctx context.Context, name string) (Check, error) {
 	min := res.MinVersions[name]
-	sys, found, err := DetectSystemTool(ctx, res.Runner, name)
-	if err == nil && found && sys.Version.AtLeast(min) {
-		return Check{Name: name, Status: "system", Version: sys.Version, Detail: sys.Path}, nil
-	}
-	for _, cached := range res.cachedTools(name) {
-		if v, err := ProbeCachedTool(ctx, res.Runner, name, cached.Path); err == nil && v.AtLeast(min) {
-			return Check{Name: name, Status: "cache", Version: v, Detail: cached.Path}, nil
+
+	systemCheck := func() (Check, bool) {
+		sys, found, err := DetectSystemTool(ctx, res.Runner, name)
+		if err == nil && found && sys.Version.AtLeast(min) {
+			return Check{Name: name, Status: "system", Version: sys.Version, Detail: sys.Path}, true
 		}
+		return Check{}, false
 	}
+	cacheCheck := func() (Check, bool) {
+		for _, cached := range res.cachedTools(name) {
+			if v, err := ProbeCachedTool(ctx, res.Runner, name, cached.Path); err == nil && v.AtLeast(min) {
+				return Check{Name: name, Status: "cache", Version: v, Detail: cached.Path}, true
+			}
+		}
+		return Check{}, false
+	}
+
+	first, second := systemCheck, cacheCheck
+	if res.PreferCached {
+		first, second = cacheCheck, systemCheck
+	}
+	if c, ok := first(); ok {
+		return c, nil
+	}
+	if c, ok := second(); ok {
+		return c, nil
+	}
+
 	if _, ok := res.Fetchers[name]; ok {
 		return Check{Name: name, Status: "download", Version: min, Detail: "latest compatible from upstream"}, nil
 	}

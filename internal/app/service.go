@@ -156,6 +156,18 @@ type InstallOptions struct {
 	LaunchAfterInstall bool
 	// KeepWorkspace retains the build workspace (for rebuild/repair).
 	KeepWorkspace bool
+	// InstallDir overrides the platform's installation root ("" → the
+	// persisted preference, then the platform default).
+	InstallDir string
+	// KeepSources retains older source trees instead of pruning them to
+	// the active and previous generation.
+	KeepSources bool
+	// ToolPreference is "system" (default) or "cached": which reuse
+	// source the resolver prefers before downloading.
+	ToolPreference string
+	// RetainBuilds keeps the replaced installation for rollback (nil →
+	// the persisted preference; the default is true, spec §24).
+	RetainBuilds *bool
 }
 
 // InstallResult summarizes a completed install/update.
@@ -264,6 +276,12 @@ func (s *Service) logDir() string {
 func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink ProgressSink, log *logging.Logger) (InstallResult, error) {
 	var result InstallResult
 
+	// 0. Advanced preferences (spec §41): apply them before any checks
+	// so the disk-space requirement looks at the real install target.
+	if err := s.applyInstallPreferences(opts, log); err != nil {
+		return result, err
+	}
+
 	// 1. Detect system ------------------------------------------------
 	sink.emit(ProgressEvent{Stage: StageDetect, Message: "Checking operating system and architecture"})
 	info, err := s.opts.Platform.Detect(ctx)
@@ -311,7 +329,7 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 	result.SkiaTag = provisioned.Contract.SkiaTag
 
 	// 6/7/8. Tools + Skia -------------------------------------------------
-	buildPlan, err := s.resolveBuildInputs(ctx, provisioned, info, sink, log)
+	buildPlan, err := s.resolveBuildInputs(ctx, provisioned, info, opts, sink, log)
 	if err != nil {
 		return result, err
 	}
@@ -432,7 +450,9 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 			log.Line("note: could not remove build dir: %v", err)
 		}
 	}
-	if err := s.pruneOldSources(result.Workspace, log); err != nil {
+	if opts.KeepSources {
+		log.Line("source retention enabled: keeping older source trees")
+	} else if err := s.pruneOldSources(result.Workspace, log); err != nil {
 		log.Line("note: source tree pruning issue: %v", err)
 	}
 
@@ -702,7 +722,7 @@ func containsDir(dirs []string, d string) bool {
 
 // resolveBuildInputs runs stages: tools (system→cache→download) and
 // Skia (requirement discovered from the source tree).
-func (s *Service) resolveBuildInputs(ctx context.Context, provisioned provisionResult, info platform.SystemInfo, sink ProgressSink, log *logging.Logger) (buildPlan, error) {
+func (s *Service) resolveBuildInputs(ctx context.Context, provisioned provisionResult, info platform.SystemInfo, opts InstallOptions, sink ProgressSink, log *logging.Logger) (buildPlan, error) {
 	var plan buildPlan
 
 	minCMake := provisioned.Contract.CMakeMinVersion
@@ -739,6 +759,8 @@ func (s *Service) resolveBuildInputs(ctx context.Context, provisioned provisionR
 			// any working version qualifies.
 			"ninja": version.Version{Parts: []int{1, 8}},
 		},
+		// Advanced preference (spec §41): cached-first when configured.
+		PreferCached: opts.ToolPreference == "cached",
 	}
 
 	sink.emit(ProgressEvent{Stage: StageResolveTools, Message: "Resolving CMake and Ninja"})

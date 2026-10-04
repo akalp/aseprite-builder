@@ -40,6 +40,12 @@ func (s *Service) Update(ctx context.Context, opts InstallOptions, sink Progress
 	if opts.Channel == aseprite.ChannelDev {
 		return InstallResult{}, ErrDevUpdateUnsupported
 	}
+	// Updates follow the existing installation's location, even when a
+	// different default was configured since (custom install path,
+	// spec §41).
+	if root := installRootFor(current.AppPath); root != "" {
+		opts.InstallDir = root
+	}
 
 	// Resolve the release first so "nothing newer" short-circuits
 	// before any build work happens.
@@ -94,6 +100,7 @@ func (s *Service) Rebuild(ctx context.Context, opts RebuildOptions, sink Progres
 	installOpts := InstallOptions{
 		Channel:               stateChannelOrDefault(current.Channel),
 		ForceOverwriteUnowned: true, // target is (or was) builder-owned
+		InstallDir:            installRootFor(current.AppPath),
 	}
 	if installOpts.Channel == aseprite.ChannelDev {
 		installOpts.Commit = current.CommitSHA
@@ -150,6 +157,7 @@ func (s *Service) Repair(ctx context.Context, sink ProgressSink) (InstallResult,
 	installOpts := InstallOptions{
 		Channel:               stateChannelOrDefault(current.Channel),
 		ForceOverwriteUnowned: true,
+		InstallDir:            installRootFor(current.AppPath),
 	}
 	if installOpts.Channel == aseprite.ChannelDev {
 		installOpts.Commit = current.CommitSHA

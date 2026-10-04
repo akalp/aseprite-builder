@@ -4,12 +4,16 @@ import "flag"
 
 // installFlagValues binds install's flags for the command handler.
 type installFlagValues struct {
-	Version       *string
-	Channel       *string
-	Yes           *bool
-	Force         *bool
-	Launch        *bool
-	KeepWorkspace *bool
+	Version        *string
+	Channel        *string
+	Yes            *bool
+	Force          *bool
+	Launch         *bool
+	KeepWorkspace  *bool
+	KeepSources    *bool
+	InstallDir     *string
+	ToolPreference *string
+	RetainBuilds   *bool
 }
 
 // installFlags defines install's flags in one place: the command both
@@ -17,12 +21,16 @@ type installFlagValues struct {
 func installFlags() (*flag.FlagSet, *installFlagValues) {
 	fs := newFlagSet("install")
 	v := &installFlagValues{
-		Version:       fs.String("version", "", "pin an exact Aseprite version, or a commit SHA for --channel dev (e.g. 1.3.18.6)"),
-		Channel:       fs.String("channel", "", "release channel: stable (default) or dev (requires Git)"),
-		Yes:           fs.Bool("yes", false, "skip the confirmation prompt"),
-		Force:         fs.Bool("force", false, "replace an Aseprite.app not installed by this tool"),
-		Launch:        fs.Bool("launch", false, "launch Aseprite after a successful install"),
-		KeepWorkspace: fs.Bool("keep-workspace", false, "keep the build workspace for repair/rebuild"),
+		Version:        fs.String("version", "", "pin an exact Aseprite version, or a commit SHA for --channel dev (e.g. 1.3.18.6)"),
+		Channel:        fs.String("channel", "", "release channel: stable (default) or dev (requires Git)"),
+		Yes:            fs.Bool("yes", false, "skip the confirmation prompt"),
+		Force:          fs.Bool("force", false, "replace an Aseprite.app not installed by this tool"),
+		Launch:         fs.Bool("launch", false, "launch Aseprite after a successful install"),
+		KeepWorkspace:  fs.Bool("keep-workspace", false, "keep the build workspace for repair/rebuild"),
+		KeepSources:    fs.Bool("keep-sources", false, "keep older downloaded source trees"),
+		InstallDir:     fs.String("install-dir", "", "install under this directory instead of the platform default"),
+		ToolPreference: fs.String("tool-preference", "", "prefer \"system\" or \"cached\" CMake/Ninja before downloading"),
+		RetainBuilds:   fs.Bool("retain-builds", true, "keep the replaced build for rollback (use --retain-builds=false to discard it)"),
 	}
 	return fs, v
 }

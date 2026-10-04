@@ -17,6 +17,7 @@ package windows
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,10 @@ type Platform struct {
 	// directory the builder cannot prove it owns. The user must opt in
 	// explicitly.
 	AllowReplaceUnowned bool
+	// DisableRetention drops the replaced installation after the new one
+	// activates instead of keeping it for rollback (advanced option,
+	// spec §24/§41). The zero value retains, preserving the default.
+	DisableRetention bool
 	// Logger receives non-fatal operational notes (nil disables).
 	Logger func(format string, args ...any)
 	// Now overrides wall-clock time in tests.
@@ -104,6 +109,22 @@ func New(r runner.Runner, builderVersion string) (Platform, error) {
 // app service uses when the user explicitly authorizes replacing an
 // existing installation the builder cannot prove it owns.
 func (p *Platform) SetAllowReplaceUnowned(v bool) { p.AllowReplaceUnowned = v }
+
+// SetInstallRoot implements platform.InstallRootSetter: the advanced
+// custom install directory (spec §41). Only an absolute path is
+// accepted; the platform creates it during install.
+func (p *Platform) SetInstallRoot(root string) error {
+	root = strings.TrimSpace(root)
+	if root == "" || !filepath.IsAbs(root) {
+		return fmt.Errorf("install directory must be an absolute path: %q", root)
+	}
+	p.ProgramsRoot = root
+	return nil
+}
+
+// SetRetainPrevious implements platform.RetentionSetter. Retaining the
+// replaced installation is the default (spec §24).
+func (p *Platform) SetRetainPrevious(retain bool) { p.DisableRetention = !retain }
 
 // note logs a non-fatal operational note.
 func (p Platform) note(format string, args ...any) {
