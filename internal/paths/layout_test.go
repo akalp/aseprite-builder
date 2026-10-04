@@ -82,6 +82,29 @@ func TestDownloadFile(t *testing.T) {
 	}
 }
 
+func TestDownloadFileSanitizesRemoteNames(t *testing.T) {
+	layout, _ := New(t.TempDir())
+	cases := map[string]string{
+		"../../etc/passwd":  ".._.._etc_passwd",
+		"..\\..\\evil.exe":  ".._.._evil.exe",
+		"..":                "unknown",
+		"/abs/path.zip":     "_abs_path.zip",
+		"":                  "unknown",
+		"a/b/c/../name.tgz": "a_b_c_.._name.tgz",
+	}
+	for in, wantName := range cases {
+		got := layout.DownloadFile("aseprite", in)
+		want := filepath.Join(layout.Downloads, "aseprite", wantName)
+		if got != want {
+			t.Errorf("DownloadFile(%q) = %q, want %q", in, got, want)
+		}
+		rel, err := filepath.Rel(layout.Downloads, got)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Errorf("DownloadFile(%q) escapes the downloads dir: %q", in, got)
+		}
+	}
+}
+
 func TestSourceTreeDir(t *testing.T) {
 	layout, _ := New(t.TempDir())
 	got := layout.SourceTreeDir("1.3.18.6")

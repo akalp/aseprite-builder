@@ -98,6 +98,16 @@ currently publish none, which is recorded in extraction metadata).
 All downloads land in user-local cache directories (`internal/paths`),
 never next to the binary and never globally installed.
 
+Aseprite source resolves through one of two channels (spec §14):
+**stable** (the default) uses the official release archives via the
+GitHub releases API and never needs Git; **dev** (advanced:
+`install --channel dev --version <sha>`) checks out an explicit commit
+with a blob-filtered `git clone`, initialized submodules and a detached
+checkout, and requires Git (`aseprite.ErrGitRequired` otherwise). Dev
+builds are identified as `dev-<short-sha>` and skip the exact
+`--version` assertion because upstream dev builds report their own
+version; contract inspection still runs on every provision.
+
 ## The upstream build contract
 
 `internal/aseprite/contract.go` inspects the extracted source tree and
@@ -180,6 +190,35 @@ distribution command (`sudo apt-get install …`, `sudo dnf install …`,
 `sudo xbps-install -S …`); the CLI runs it visibly only after explicit
 TTY consent (the TUI is instruction-only) — never silently, never from
 `--yes`.
+
+## Repair, diagnostics and advanced preferences
+
+`repair` verifies the installation against its recorded state — bundle
+present, ownership marker present and matching the recorded version,
+executable runnable and reporting that version — and rebuilds when any
+check fails. When the installation is healthy it runs targeted platform
+repairs instead (spec §25): stale staging from an interrupted update on
+every platform, plus (Linux) recreating the CLI symlink, desktop entry
+and hicolor icons from the cached source tree, then refreshing the
+desktop/icon caches. Foreign files are never overwritten, every action
+is logged, and a recorded previous installation that no longer exists
+is dropped from the state.
+
+`doctor` (`--json` too) adds two rows built from the same app-layer
+facts the CLI and TUI render: **Build contract** re-inspects the newest
+cached source tree (the installed workspace first) and fails safe when
+it is unrecognized; **CLI integration** (Linux) validates the symlink
+target, the builder-owned desktop entry and the icons.
+
+Advanced preferences (spec §41) live in `state.Config` and as per-run
+flags: release channel, pinned version/commit, custom install
+directory, source retention, system-vs-cached tool preference,
+previous-build retention, verbose logs and keep-workspace. They are
+applied by `internal/app` before the requirements run — so the
+disk-space check sees the real target — and platforms expose them
+through optional interfaces (`InstallRootSetter`, `RetentionSetter`,
+`Repairer`, `IntegrationDoctor`) that keep platform code free of
+config knowledge.
 
 ## State and logs
 

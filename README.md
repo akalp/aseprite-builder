@@ -64,8 +64,14 @@ supports Aseprite's major desktop build platforms:
   settings / uninstall — same services as the CLI, structured progress,
   license notice on first run). The non-interactive CLI remains for
   advanced users and automation.
-- Stable-channel Aseprite resolution from official GitHub release
-  metadata (no Git required).
+- Stable releases resolve from official GitHub release metadata (no
+  Git required). An advanced **development channel** can build an
+  explicit commit (`install --channel dev --version <sha>`, requires
+  Git); stable stays the default everywhere.
+- Advanced preferences stay out of the default flow: custom install
+  directory, source retention, system-vs-cached CMake/Ninja preference,
+  previous-build retention, keep-workspace, verbose logs — all in the
+  TUI Settings screen and as per-run flags.
 - Runtime-resolved dependencies: system CMake/Ninja are reused when
   compatible; missing tools are downloaded from their authoritative
   upstream sources into the user-local cache. The required Skia

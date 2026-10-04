@@ -134,10 +134,11 @@ func (l *Logger) LogPath() string {
 
 // redactEnvKey marks sensitive environment keys so raw values never hit
 // the log. The builder only ever passes its own build env, but the log
-// layer enforces the invariant defense-in-depth.
+// layer enforces the invariant defense-in-depth. The match is
+// deliberately broad (over-redaction is safe).
 func redactEnvKey(key string) string {
 	upper := strings.ToUpper(key)
-	for _, sensitive := range []string{"TOKEN", "PASSWORD", "PASSWD", "SECRET", "KEY", "CREDENTIAL"} {
+	for _, sensitive := range []string{"TOKEN", "PASSWORD", "PASSWD", "SECRET", "KEY", "CREDENTIAL", "JWT"} {
 		if strings.Contains(upper, sensitive) {
 			return key + "=(redacted)"
 		}

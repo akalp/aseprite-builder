@@ -108,10 +108,12 @@ func (l Layout) SourceTreeDir(asepriteVersion string) string {
 }
 
 // DownloadFile returns the target path for a downloaded artifact,
-// namespaced by owning component to prevent accidental collisions
-// between unrelated subsystems.
+// namespaced by owning component. Both parts are reduced to single safe
+// path components: remote metadata can influence asset names, and
+// remote filenames are untrusted input (spec §33), so separators or
+// traversal sequences can never escape the downloads directory.
 func (l Layout) DownloadFile(component, name string) string {
-	return filepath.Join(l.Downloads, strings.ToLower(component), name)
+	return filepath.Join(l.Downloads, sanitize(strings.ToLower(component)), sanitize(name))
 }
 
 func sanitize(version string) string {
@@ -127,7 +129,11 @@ func sanitize(version string) string {
 			b.WriteRune('_')
 		}
 	}
-	return b.String()
+	out := b.String()
+	if out == "." || out == ".." {
+		return "unknown"
+	}
+	return out
 }
 
 // userDataDir mirrors os.UserCacheDir's semantics for application data.

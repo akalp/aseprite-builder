@@ -46,6 +46,18 @@ func buildTarGz(t *testing.T, src string, files map[string]string) {
 	}
 }
 
+func TestUntarGzRejectsAbsolutePaths(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "abs.tar.gz")
+	buildTarGz(t, src, map[string]string{"/tmp/abs.txt": "x"})
+	dst := filepath.Join(t.TempDir(), "out")
+	if err := UntarGz(src, dst); err == nil {
+		t.Fatal("absolute tar entries must be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(dst, "abs.txt")); !os.IsNotExist(err) {
+		t.Error("nothing may be extracted from a rejected archive")
+	}
+}
+
 func TestUntarGzFlat(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "tool.tar.gz")
 	buildTarGz(t, src, map[string]string{

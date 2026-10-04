@@ -57,12 +57,24 @@ func TestNopLogger(t *testing.T) {
 
 func TestRedactEnvKey(t *testing.T) {
 	tests := map[string]string{
-		"PATH":            "PATH",
-		"GITHUB_TOKEN":    "GITHUB_TOKEN=(redacted)",
-		"MY_SECRET_VALUE": "MY_SECRET_VALUE=(redacted)",
-		"password2":       "password2=(redacted)",
-		"DOWNLOAD_KEY":    "DOWNLOAD_KEY=(redacted)",
-		"HOME":            "HOME",
+		"PATH":                  "PATH",
+		"HOME":                  "HOME",
+		"LANG":                  "LANG",
+		"CMAKE_OSX_SYSROOT":     "CMAKE_OSX_SYSROOT",
+		"GITHUB_TOKEN":          "GITHUB_TOKEN=(redacted)",
+		"GH_TOKEN":              "GH_TOKEN=(redacted)",
+		"MY_SECRET_VALUE":       "MY_SECRET_VALUE=(redacted)",
+		"password2":             "password2=(redacted)",
+		"DOWNLOAD_KEY":          "DOWNLOAD_KEY=(redacted)",
+		"AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY=(redacted)",
+		"AWS_SESSION_TOKEN":     "AWS_SESSION_TOKEN=(redacted)",
+		"NPM_TOKEN":             "NPM_TOKEN=(redacted)",
+		"DATABASE_PASSWORD":     "DATABASE_PASSWORD=(redacted)",
+		"SSH_KEY":               "SSH_KEY=(redacted)",
+		"API_KEY":               "API_KEY=(redacted)",
+		"CI_JOB_JWT":            "CI_JOB_JWT=(redacted)",
+		"NUGET_API_KEY":         "NUGET_API_KEY=(redacted)",
+		"SIGNING_CREDENTIALS":   "SIGNING_CREDENTIALS=(redacted)",
 	}
 	for in, want := range tests {
 		if got := redactEnvKey(in); got != want {

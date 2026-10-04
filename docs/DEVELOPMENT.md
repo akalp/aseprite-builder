@@ -123,3 +123,39 @@ before merging: the three `test (…-latest)` jobs and the
 `release safety (spec §38)` job from `.github/workflows/ci.yml`.
 The workflow-lint tests in `internal/archtest` keep the required jobs
 from silently disappearing.
+
+## Real-host end-to-end verification (manual)
+
+CI runs fast checks only (format/vet/tests, a `doctor --json` smoke and
+the §38 release check) — it never compiles Aseprite. The full
+compile-and-install path is verified manually before a tag, from the
+built release artifact, on each supported platform:
+
+1. Unpack the platform's artifact and first run it in an isolated
+   `HOME`: `HOME=$(mktemp -d) ./aseprite-builder doctor --json` — it
+   must not touch the real profile, and the JSON must parse.
+2. With the real profile: `./aseprite-builder doctor` — requirements
+   and tool resolution look right; missing system packages come with
+   one copy-paste command.
+3. `./aseprite-builder install` — compiles from the official source,
+   verifies the executable, installs it. Note the version and path.
+4. `./aseprite-builder launch` — the installed application opens.
+5. `./aseprite-builder update` — unless already up to date; the
+   previous installation is retained and the new one activates.
+6. `./aseprite-builder repair` — reports the installation healthy and
+   rebuilds nothing.
+7. `./aseprite-builder rebuild` — recompiles the installed version.
+8. `./aseprite-builder uninstall` — removes only builder-owned files;
+   the application path is gone and user files are intact.
+9. Linux additionally: after install, check the
+   `~/.local/bin/aseprite` symlink, the desktop entry and the app-menu
+   icon; delete the symlink and run `repair` to watch it recreated.
+10. Dev channel (once a cycle, on a macOS/Linux host with Git):
+    `./aseprite-builder install --channel dev --version <sha>` checks
+    out the explicit commit and builds it; `update` refuses with clear
+    guidance; `uninstall` still cleans up.
+
+Run the matrix before tagging: macOS arm64 and amd64, Windows 11 x64,
+and Linux amd64 on at least Debian/Ubuntu plus one of
+Fedora/Arch/openSUSE/Void. Record the completed runs in the release
+notes.

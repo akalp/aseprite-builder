@@ -5,6 +5,7 @@ package archtest
 import (
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,5 +162,53 @@ func TestReleaseWorkflowPublishesTaggedArtifacts(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Errorf("release.yml must contain %q", want)
 		}
+	}
+}
+
+// TestProcessExecutionOnlyInRunner enforces the single process-execution
+// path (spec §31/§33): production code outside internal/runner must not
+// spawn processes directly, and no source may execute a shell string
+// built from interpolated input.
+func TestProcessExecutionOnlyInRunner(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipDirs := map[string]bool{".git": true, "dist": true, "testdata": true, ".github": true}
+	forbidden := []string{`"sh", "-c"`, `"bash", "-c"`, `"powershell", "-Command"`, `"pwsh", "-Command"`}
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skipDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil // tests may use os/exec for local smoke checks
+		}
+		if strings.Contains(filepath.ToSlash(path), "/internal/runner/") {
+			return nil // the one sanctioned exec site
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		content := string(data)
+		if strings.Contains(content, `"os/exec"`) {
+			t.Errorf("%s imports os/exec; process execution goes through internal/runner", path)
+		}
+		for _, pat := range forbidden {
+			if strings.Contains(content, pat) {
+				t.Errorf("%s executes a shell string (%s); use direct argv execution", path, pat)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

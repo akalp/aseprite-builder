@@ -1,6 +1,11 @@
 # Phase 5 — Release engineering & hardening (Spec Milestone 7)
 
-**Status:** Planned
+**Status:** ✅ Implemented (2026-10-04) — `make check` green on macOS;
+`GOOS=linux|windows go vet ./...` clean; linux-tagged suite green in a
+container; release artifacts built and checked locally; CI workflows
+written and guarded by `internal/archtest`. The real-host E2E checklist
+is documented (DEVELOPMENT.md) and is executed by the owner before the
+first tag (decision: no Aseprite build in CI).
 **Spec:** §3/§36 (release artifacts), §37 (testing/CI), §38 (release safety), §14 (development channel), §24/§25 (rollback/repair), §28 (doctor), §30 (CLI), §33 (security), §41 (advanced mode)
 **Depends on:** Phases 1–4 (all platform slices + TUI implemented)
 **Sequencing:** two PRs — (1) release + CI + §38 release-safety; (2) dev channel + advanced options + repair breadth + doctor + security review. Real-host E2E checklist lands with (2).
@@ -48,6 +53,61 @@ gaps. Confirmed in code:
 4. **All four remaining §41 options** are implemented now (custom
    install path, source retention, system-vs-cached tool preference,
    build retention), not deferred.
+
+## Implementation record (2026-10-04)
+
+Shipped in four commits plus this docs pass:
+
+- **Release engineering:** `internal/release` (the §3 target matrix,
+  reproducible tar.gz/zip packs, `Version` from `VERSION` or the
+  nearest git tag, `NormalizeVersion`), `internal/releasecheck` (the
+  §38 forbidden-family classifier plus an exact payload allowlist —
+  release archives contain only the builder executable),
+  `cmd/release` (`-os/-arch/-dist` filters for CI),
+  `cmd/releasecheck`, and `make release`/`dist`/`release-check`.
+  Verified locally: all four artifacts build, the darwin binary reports
+  the injected version, and the checker rejects a planted source
+  archive.
+- **CI:** `.github/workflows/ci.yml` (format/vet/tests on
+  ubuntu/macos/windows, a built-binary `doctor --json` smoke, the
+  release-safety job) and `.github/workflows/release.yml`
+  (tag-triggered, native per-OS builds with a merged-artifact re-check,
+  published through `gh release`). `internal/archtest` guards both
+  workflows' required jobs.
+- **Dev channel:** `aseprite.ChannelDev`, `Release.Commit` +
+  `BuildVersion`, `ValidCommit`/`ShortCommit`, `GitCommitSource`
+  (git probe first so a missing Git never deletes a checkout;
+  blob-filtered clone, detached checkout, recursive submodules; reuse
+  when HEAD matches), app-side validation/state (`CommitSHA`),
+  `update` refusing dev installs with guidance, CLI `--channel dev
+  --version <sha>`, and the TUI settings toggle + home commit prompt.
+- **Advanced options:** `state.Config.{InstallDir,KeepSources,
+  ToolPreference,RetainBuilds}` + per-run flags
+  (`--install-dir`, `--keep-sources`, `--tool-preference`,
+  `--retain-builds=false`) + TUI settings. Interpretations:
+  build retention is an opt-out of the one-generation retention
+  (dropped **after** activation, so a failed activation still rolls
+  back); source retention skips pruning older trees (the active tree
+  was always kept). The selector bug hiding all pointer-receiver
+  capabilities (`SetAllowReplaceUnowned` silently inert in production)
+  was fixed and guarded by a test.
+- **Repair/doctor:** marker/version consistency, stale-previous-record
+  cleanup, `platform.Repairer` (stale staging everywhere; Linux symlink
+  / desktop entry / icon recreation), doctor "Build contract" and
+  "CLI integration" rows feeding the report status.
+- **Security:** `paths.DownloadFile` sanitizes both components
+  (remote filenames are untrusted; traversal can never escape the
+  downloads dir), broadened env-var redaction fixtures (JWT added),
+  an archtest that confines `os/exec` to `internal/runner` and bans
+  shell-string execution, and a tar.gz absolute-path fixture.
+- **E2E checklist:** DEVELOPMENT.md "Real-host end-to-end
+  verification (manual)".
+
+The DoD items map as follows: `make release` + §38 checker ✅;
+CI tag builds/publishes ✅ (first tag still pending); manual E2E
+checklist exists ✅ (executed by the owner before the first tag — this
+is the one intentionally manual item, per decision 1); docs updated ✅
+(README, DEVELOPMENT, ARCHITECTURE, plans README, this file).
 
 ## Work items
 
@@ -179,12 +239,17 @@ never touch the network.
 
 ## Definition of done
 
-- `make release` produces spec-§3 artifacts that the §38 checker
-  accepts; CI builds them on tag and attaches to a GitHub Release.
-- Spec §44 has no ❌ left for the platform row available at that time;
-  each ✔/✘ has a test or a page of code behind it.
-- The real-host E2E checklist exists and was executed once on each
-  supported platform before the first tag.
-- README status, DEVELOPMENT release section, AGENTS.md (if the
-  no-deps rule needs one more nuance for the release-checker helper),
-  ARCHITECTURE.md, and the plans README (milestone 7 row) all updated.
+- ✅ `make release` produces spec-§3 artifacts that the §38 checker
+  accepts (verified locally); `.github/workflows/release.yml` builds
+  them on tag and attaches them to a GitHub Release (first tag
+  pending).
+- ✅ Spec §44: every implemented platform row has code and tests behind
+  it; the real-host runs are the manual checklist.
+- ✅ The real-host E2E checklist exists in DEVELOPMENT.md and is
+  executed on each supported platform before the first tag (manual by
+  decision 1).
+- ✅ README status, DEVELOPMENT (release, branch protection, manual
+  E2E), ARCHITECTURE (source channels, repair/diagnostics/advanced
+  preferences) and the plans README (milestone 7 row) updated.
+  AGENTS.md needed no change: the release tooling is ordinary
+  in-module Go and preserves every listed rule.
