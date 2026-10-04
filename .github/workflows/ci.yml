@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Format check
+        shell: bash
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test ./...
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          tmp="$(mktemp -d)"
+          go build -o "$tmp/aseprite-builder" ./cmd/aseprite-builder
+          HOME="$tmp" "$tmp/aseprite-builder" doctor --json > "$tmp/doctor.json" || true
+          grep -q '"status"' "$tmp/doctor.json"
+          echo "doctor JSON validated"
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "ab-smoke"
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          $env:USERPROFILE = $tmp
+          $env:LOCALAPPDATA = Join-Path $tmp "AppData\Local"
+          $env:APPDATA = Join-Path $tmp "AppData\Roaming"
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+          New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
+          go build -o "$tmp\aseprite-builder.exe" ./cmd/aseprite-builder
+          $out = & "$tmp\aseprite-builder.exe" doctor --json
+          if ($LASTEXITCODE -ne 0) { Write-Host "doctor reported issues (expected on CI runners)" }
+          ($out -join "`n") | ConvertFrom-Json | Out-Null
+          Write-Host "doctor JSON validated"
+
+  release-safety:
+    name: release safety (spec §38)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build release artifacts (dry run)
+        run: make release VERSION=0.0.0-ci
+      - name: Run the release-safety checker
+        run: go run ./cmd/releasecheck dist/*

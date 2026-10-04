@@ -5,9 +5,9 @@
 - Go 1.24+
 - macOS is the primary development host. The macOS slice is
   implemented; Windows x64 and Linux x86_64 (Debian/Ubuntu, Fedora/RHEL,
-  Arch, openSUSE, Void) are
-  implemented and cross-checked from macOS (`GOOS=… go vet`, plus a
-  Linux container for executing the linux-tagged tests).
+  Arch, openSUSE, Void) are implemented and cross-checked from macOS
+  (`GOOS=… go vet`, plus a Linux container for executing the
+  linux-tagged tests).
 
 ## Common commands
 
@@ -85,6 +85,8 @@ section 2.
 ```bash
 make check          # gofmt + vet + test
 make build          # build ./aseprite-builder at the repo root (gitignored)
+make release        # cross-compile + pack the four spec §3 artifacts into dist/
+make release-check  # re-run the §38 release-safety checker over dist/
 make clean          # remove the repo-root binary and dist/
 ```
 
@@ -94,5 +96,30 @@ spec §36): UI libraries (Bubble Tea, Lip Gloss) are allowed only in
 
 Never commit: downloaded archives, extracted sources, toolchains, Skia
 packages, built Aseprite artifacts, or `.cache`. `.gitignore` covers
-the usual suspects; release packaging scripts (a later milestone) must
-run the release safety checks from spec section 38.
+the usual suspects; `make release` packs only project-owned output and
+fails the §38 release-safety check (`cmd/releasecheck`) if an artifact
+ever contains anything else.
+
+## Releases
+
+`make release` cross-compiles the four spec §3 artifacts into `dist/`,
+stamping the version from `VERSION` or the nearest git tag (falling
+back to `0.1.0-dev`) through
+`-ldflags "-X main.version=…"`, then runs the §38 checker. Pushing a
+`vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds each
+artifact on its own OS runner (macOS also cross-builds the Intel
+binary), re-runs the checker over the merged set, and attaches the
+archives to the GitHub Release with the `gh` CLI.
+
+Tracker state lives in `internal/state`; `aseprite-builder version`
+reports the stamped builder version. CI covers format/vet/tests on
+ubuntu/macos/windows plus a `doctor --json` smoke and the release
+safety job.
+
+### Branch protection (owner action)
+
+Configure the repository so `main` requires the CI checks to pass
+before merging: the three `test (…-latest)` jobs and the
+`release safety (spec §38)` job from `.github/workflows/ci.yml`.
+The workflow-lint tests in `internal/archtest` keep the required jobs
+from silently disappearing.

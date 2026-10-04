@@ -22,6 +22,11 @@ internal/cli    internal/tui            (frontends: parse/print / Bubble Tea)
         infrastructure: runner, download, archive, upstream, paths, state,
                         logging, version, packages (apt/dnf/pacman/zypper/xbps
                         + packages/selector)
+
+cmd/release, cmd/releasecheck   (release tooling, not shipped in the product)
+        └──────────┬───────────┘
+                   ↓
+        internal/release, internal/releasecheck
 ```
 
 - **UI never contains business logic.** `internal/cli` only parses
@@ -39,6 +44,12 @@ internal/cli    internal/tui            (frontends: parse/print / Bubble Tea)
   user directories).
 - **No version matrices.** Versions come from upstream at runtime
   (see below).
+- **Release tooling is separate from the product.** `internal/release`
+  packs the spec §3 archives (version stamped via ldflags) and
+  `internal/releasecheck` enforces the §38 allowlist over artifact
+  trees and archive contents; neither is reachable from
+  `cmd/aseprite-builder`, so shipping the builder never ships the
+  release machinery.
 
 ## TUI (interactive primary interface)
 
@@ -198,3 +209,21 @@ and the selection matrix are tested on every host; the linux-tagged
 platform suite compiles under `GOOS=linux go vet` and executes in a
 Linux container (or on a Linux host). See `DEVELOPMENT.md` for
 commands.
+
+`internal/release`/`internal/releasecheck` are host-neutral too: pack
+tests assert the exact §3 entry names inside the archives, the §38
+checker is exercised against fake pass/fail trees and archive
+fixtures, and `internal/archtest` guards that the CI and release
+workflows keep their required jobs.
+
+## Release engineering
+
+`make release` (or `go run ./cmd/release`) cross-compiles the four §3
+artifacts with `CGO_ENABLED=0`, stamps `main.version` with the git tag
+(or `VERSION=`), packs them reproducibly, and runs the §38 checker.
+`.github/workflows/release.yml` performs the same build per OS on tag
+push and attaches the archives to the GitHub Release through the `gh`
+CLI; `.github/workflows/ci.yml` runs format/vet/tests on
+ubuntu/macos/windows, a `doctor --json` smoke, and the release-safety
+job. The release tooling vendors nothing: it is ordinary Go code in the
+same module (spec §3/§36/§38).

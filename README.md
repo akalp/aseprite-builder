@@ -10,6 +10,33 @@ directories.
 > Aseprite is compiled locally from official source; this tool
 > **never redistributes** compiled Aseprite binaries.
 
+## Releases
+
+Tagged releases are built and published by CI from the tag's commit:
+each artifact is compiled under Go on its own platform's runner, the
+spec §38 release-safety checker verifies that every archive contains
+only the `aseprite-builder` executable, and the four archives are
+attached to the [GitHub Release][releases]:
+
+```text
+aseprite-builder_Darwin_arm64.tar.gz   (macOS Apple Silicon)
+aseprite-builder_Darwin_x86_64.tar.gz  (macOS Intel)
+aseprite-builder_Windows_x86_64.zip    (Windows 11 x64)
+aseprite-builder_Linux_x86_64.tar.gz   (Linux x86_64)
+```
+
+Download the archive for your platform, unpack the single executable,
+and run it — no installer, no third-party runtime, no build tools
+needed just to start.
+
+Maintainers: `make release` cross-compiles and packs the same four
+artifacts into `dist/` locally and runs the §38 checker;
+`go run ./cmd/releasecheck dist/*` re-runs the check alone. Pushing a
+`vX.Y.Z` tag runs the authoritative CI build, which stamps the version
+from the tag.
+
+[releases]: https://github.com/akalp/aseprite-builder/releases
+
 ## Current status
 
 The project is at the first vertical slice plus its interactive UI, and
@@ -91,13 +118,16 @@ install a native ~/Applications/Aseprite.app
 ```
 
 On Linux the same pipeline runs with distribution-native package
-handling: `/etc/os-release` identifies the distribution (Debian/Ubuntu
-today), missing build packages are shown as a single
-`sudo apt-get install …` command, and the result is installed to
-`~/.local/opt/aseprite` with a `~/.local/bin/aseprite` symlink, a
-desktop entry and hicolor icons. If you consent on a live terminal the
-CLI runs that install command visibly for you; otherwise it stops and
-prints the exact command to run yourself.
+handling: `/etc/os-release` identifies the distribution (Debian/Ubuntu,
+Fedora/RHEL, Arch, openSUSE and Void are supported), missing build
+packages are shown as a single `sudo apt-get install …` /
+`sudo dnf install …` / `sudo pacman -S --needed …` /
+`sudo zypper install …` / `sudo xbps-install -S …` command, and the
+result is installed to `~/.local/opt/aseprite` with a
+`~/.local/bin/aseprite` symlink, a desktop entry and hicolor icons. If
+you consent on a live terminal the CLI runs that install command
+visibly for you; otherwise it stops and prints the exact command to run
+yourself.
 
 ## Documentation
 

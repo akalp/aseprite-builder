@@ -107,3 +107,59 @@ func TestNoFrontendImportsAnotherFrontend(t *testing.T) {
 		})
 	}
 }
+
+// TestCIWorkflowCoversRequiredJobs is a lightweight presence guard for
+// .github/workflows/ci.yml: it keeps the matrix from silently rotting.
+// It is intentionally not a YAML parser (no new dependency for a
+// workflow check) — it asserts the contract the phase promises.
+func TestCIWorkflowCoversRequiredJobs(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	content := string(data)
+	required := []string{
+		"ubuntu-latest",
+		"macos-latest",
+		"windows-latest",
+		"go test ./...",
+		"go run ./cmd/releasecheck",
+		"doctor --json",
+		"make release",
+	}
+	for _, want := range required {
+		if !strings.Contains(content, want) {
+			t.Errorf("ci.yml must contain %q", want)
+		}
+	}
+}
+
+// TestReleaseWorkflowPublishesTaggedArtifacts keeps the tag-triggered
+// release workflow aligned with the spec: build under Go, run the §38
+// checker, publish through the GitHub CLI.
+func TestReleaseWorkflowPublishesTaggedArtifacts(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("read release.yml: %v", err)
+	}
+	content := string(data)
+	required := []string{
+		`tags: ["v*"]`,
+		"go run ./cmd/release",
+		"go run ./cmd/releasecheck",
+		"gh release",
+	}
+	for _, want := range required {
+		if !strings.Contains(content, want) {
+			t.Errorf("release.yml must contain %q", want)
+		}
+	}
+}
