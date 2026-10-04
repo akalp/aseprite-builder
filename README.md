@@ -8,7 +8,9 @@ directories.
 
 > Not affiliated with or endorsed by Aseprite or Igara Studio.
 > Aseprite is compiled locally from official source; this tool
-> **never redistributes** compiled Aseprite binaries.
+> **never redistributes** compiled Aseprite binaries. aseprite-builder
+> is MIT-licensed; Aseprite itself is governed by its own EULA — see
+> [`NOTICE`](NOTICE).
 
 ## Releases
 
@@ -140,5 +142,6 @@ yourself.
 - [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md) — the full product spec
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the code maps to it
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — development workflow
+- [`NOTICE`](NOTICE) — licensing: builder MIT, Aseprite EULA
 
 [Aseprite]: https://www.aseprite.org/

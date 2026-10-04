@@ -1,0 +1,33 @@
+# Notices and licensing
+
+## aseprite-builder
+
+aseprite-builder is licensed under the **MIT License** — see
+[LICENSE](LICENSE). That license covers only the builder's own source
+code.
+
+## Aseprite
+
+Aseprite is a separate project by Igara Studio S.A.; aseprite-builder
+is **not affiliated with or endorsed by** Aseprite or Igara Studio.
+
+aseprite-builder downloads Aseprite's official source code and
+compiles it on your machine. It does **not** redistribute Aseprite,
+its source code, or compiled Aseprite binaries — neither in its source
+repository nor in its release artifacts.
+
+Your use of Aseprite is governed by Aseprite's own end-user license
+agreement (EULA):
+
+- Aseprite EULA:
+  <https://github.com/aseprite/aseprite/blob/main/EULA.txt>
+- "Can I redistribute Aseprite?" (official FAQ):
+  <https://www.aseprite.org/faq/#can-i-redistribute-aseprite>
+
+In short: the EULA permits downloading and compiling Aseprite's source
+and using it (including creating assets for commercial projects), but
+it does not permit redistributing compiled Aseprite to third parties.
+
+You are responsible for complying with Aseprite's EULA when you build
+and use Aseprite. If you intend to distribute anything built with this
+tool, read the EULA first.
