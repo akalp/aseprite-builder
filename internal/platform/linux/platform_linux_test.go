@@ -14,6 +14,10 @@ import (
 
 	"github.com/akalp/aseprite-builder/internal/packages"
 	"github.com/akalp/aseprite-builder/internal/packages/apt"
+	"github.com/akalp/aseprite-builder/internal/packages/dnf"
+	"github.com/akalp/aseprite-builder/internal/packages/pacman"
+	"github.com/akalp/aseprite-builder/internal/packages/xbps"
+	"github.com/akalp/aseprite-builder/internal/packages/zypper"
 	"github.com/akalp/aseprite-builder/internal/platform"
 	"github.com/akalp/aseprite-builder/internal/runner"
 )
@@ -41,6 +45,35 @@ func writeOSRelease(t *testing.T, dir, content string) string {
 	return p
 }
 
+// fakeManagers fabricates tool files for the listed base names and
+// points every manager at either the fabricated file or a nonexistent
+// path, so backend selection is deterministic regardless of the host
+// distribution.
+func fakeManagers(t *testing.T, r runner.Runner, present ...string) map[packages.ManagerName]packages.Manager {
+	t.Helper()
+	dir := t.TempDir()
+	have := map[string]bool{}
+	for _, name := range present {
+		have[name] = true
+	}
+	tool := func(name string) string {
+		p := filepath.Join(dir, name)
+		if have[name] {
+			if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return p
+	}
+	return map[packages.ManagerName]packages.Manager{
+		packages.ManagerApt:    apt.Platform{Runner: r, APTGet: tool("apt-get"), DpkgQuery: tool("dpkg-query")},
+		packages.ManagerDnf:    dnf.Platform{Runner: r, DNF: tool("dnf"), RPM: tool("rpm")},
+		packages.ManagerPacman: pacman.Platform{Runner: r, Pacman: tool("pacman")},
+		packages.ManagerZypper: zypper.Platform{Runner: r, Zypper: tool("zypper"), RPM: tool("rpm")},
+		packages.ManagerXbps:   xbps.Platform{Runner: r, XbpsInstall: tool("xbps-install"), XbpsQuery: tool("xbps-query")},
+	}
+}
+
 func newTestPlatform(t *testing.T, r runner.Runner) Platform {
 	t.Helper()
 	root := t.TempDir()
@@ -52,6 +85,9 @@ func newTestPlatform(t *testing.T, r runner.Runner) Platform {
 		OSReleasePath:  writeOSRelease(t, root, ubuntuOSRelease),
 		BuilderVersion: "test",
 		Now:            func() time.Time { return time.Unix(1700000000, 0) },
+		// The Ubuntu fixture selects apt; the fabricated apt tools keep
+		// selection independent of the host's real package manager.
+		managerOverride: fakeManagers(t, r, "apt-get", "dpkg-query"),
 	}
 }
 
@@ -105,6 +141,20 @@ func dpkgStatusFaker(installed map[string]bool) func(runner.Command) (runner.Res
 			}
 		}
 		return runner.Result{Stdout: b.String(), ExitCode: 1}, true
+	}
+}
+
+// rpmStatusFaker serves `rpm -q <pkg>` probes: installed packages exit
+// zero, everything else exits non-zero.
+func rpmStatusFaker(installed map[string]bool) func(runner.Command) (runner.Result, bool) {
+	return func(c runner.Command) (runner.Result, bool) {
+		if !strings.HasSuffix(c.Name, "rpm") || len(c.Args) != 2 || c.Args[0] != "-q" {
+			return runner.Result{}, false
+		}
+		if installed[c.Args[1]] {
+			return runner.Result{ExitCode: 0}, true
+		}
+		return runner.Result{ExitCode: 1}, true
 	}
 }
 
@@ -186,6 +236,9 @@ func TestRequirementsAllPackagesPresent(t *testing.T) {
 }
 
 func TestRequirementsUnsupportedDistroFailsSafely(t *testing.T) {
+	// The Fedora fixture selects the dnf family, but this platform's
+	// fabricated tool set has no dnf: fail safely instead of guessing
+	// another backend.
 	p := newTestPlatform(t, &runner.FakeRunner{})
 	p.OSReleasePath = writeOSRelease(t, t.TempDir(), fedoraOSRelease)
 	checks, err := p.Requirements(context.Background())
@@ -193,13 +246,40 @@ func TestRequirementsUnsupportedDistroFailsSafely(t *testing.T) {
 		t.Fatalf("Requirements: %v", err)
 	}
 	dist := findCheck(t, checks, "Distribution")
-	if dist.OK || !strings.Contains(dist.Fix, "Debian and Ubuntu") {
+	if dist.OK || !strings.Contains(dist.Fix, "Debian/Ubuntu") {
 		t.Errorf("distribution check = %+v", dist)
 	}
 	for _, c := range checks {
 		if strings.HasPrefix(c.Name, "Build packages") {
 			t.Errorf("no package check may run on an unsupported distribution: %+v", c)
 		}
+	}
+}
+
+func TestRequirementsComposesWithSelectedManager(t *testing.T) {
+	// A Fedora fixture with dnf tools present must use dnf's package
+	// table and command, not apt's.
+	f := &runner.FakeRunner{Match: rpmStatusFaker(map[string]bool{"gcc-c++": true})}
+	p := newTestPlatform(t, f)
+	p.OSReleasePath = writeOSRelease(t, t.TempDir(), fedoraOSRelease)
+	p.managerOverride = fakeManagers(t, f, "dnf", "rpm")
+
+	checks, err := p.Requirements(context.Background())
+	if err != nil {
+		t.Fatalf("Requirements: %v", err)
+	}
+	if dist := findCheck(t, checks, "Distribution"); !dist.OK || !strings.Contains(dist.Detail, "Fedora") {
+		t.Fatalf("distribution check = %+v, want Fedora detected", dist)
+	}
+	pkg := findCheck(t, checks, "Build packages (dnf)")
+	if pkg.OK {
+		t.Fatalf("Build packages must fail when packages are missing: %+v", pkg)
+	}
+	if !strings.Contains(pkg.Detail, "ninja-build") || !strings.Contains(pkg.Detail, "mesa-libGL-devel") {
+		t.Errorf("Detail = %q, want the dnf package names", pkg.Detail)
+	}
+	if !strings.HasPrefix(pkg.Fix, "sudo dnf install ") || strings.Contains(pkg.Fix, "gcc-c++") {
+		t.Errorf("Fix = %q, want the dnf command with only missing packages", pkg.Fix)
 	}
 }
 
@@ -243,6 +323,27 @@ func TestSystemPackagesUnsupportedDistroIsEmpty(t *testing.T) {
 	}
 	if report.Manager != "" || len(report.Missing) != 0 || report.Command != "" {
 		t.Errorf("report = %+v, want empty", report)
+	}
+}
+
+func TestSystemPackagesUsesSelectedManager(t *testing.T) {
+	f := &runner.FakeRunner{Match: rpmStatusFaker(map[string]bool{"gcc-c++": true, "clang": true, "cmake": true})}
+	p := newTestPlatform(t, f)
+	p.OSReleasePath = writeOSRelease(t, t.TempDir(), fedoraOSRelease)
+	p.managerOverride = fakeManagers(t, f, "dnf", "rpm")
+
+	report, err := p.SystemPackages(context.Background())
+	if err != nil {
+		t.Fatalf("SystemPackages: %v", err)
+	}
+	if report.Manager != "dnf" {
+		t.Fatalf("manager = %q, want dnf", report.Manager)
+	}
+	if !strings.HasPrefix(report.Command, "sudo dnf install ") || !strings.Contains(report.Command, "ninja-build") {
+		t.Errorf("command = %q, want a dnf command for the missing packages", report.Command)
+	}
+	if strings.Contains(report.Command, "gcc-c++") {
+		t.Errorf("command = %q must list only missing packages", report.Command)
 	}
 }
 

@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/akalp/aseprite-builder/internal/packages"
@@ -68,7 +67,10 @@ func requiredPackages() []packages.Package {
 // expects for a full Linux build.
 func RequiredPackages() []packages.Package { return requiredPackages() }
 
-// Platform implements packages.PackageManager for apt.
+// RequiredPackages implements packages.Manager.
+func (p Platform) RequiredPackages() []packages.Package { return RequiredPackages() }
+
+// Platform implements packages.Manager for apt.
 type Platform struct {
 	// Runner executes probe and install commands (injected for tests).
 	Runner runner.Runner
@@ -76,22 +78,16 @@ type Platform struct {
 	APTGet string
 	// DpkgQuery is the dpkg-query executable ("" → DefaultDpkgQuery).
 	DpkgQuery string
-	// OSRelease identifies the host distribution.
-	OSRelease packages.OSRelease
-	// Logger receives non-fatal notes (nil disables).
-	Logger func(format string, args ...any)
 }
 
-// Applies reports whether apt is the package manager family of the
-// host distribution (Debian, Ubuntu, or a derivative).
-func (p Platform) Applies() bool { return p.OSRelease.IsDebianLike() }
+var _ packages.Manager = Platform{}
 
-// Detect implements packages.PackageManager.
-func (p Platform) Detect(ctx context.Context) bool {
-	if !p.Applies() || ctx.Err() != nil {
-		return false
-	}
-	return fileExists(p.aptGet()) && fileExists(p.dpkgQuery())
+// Detect implements packages.PackageManager: apt is usable when both
+// its install tool and the dpkg query tool are present. Family
+// applicability (Debian/Ubuntu) is decided by
+// internal/packages/selector.
+func (p Platform) Detect(context.Context) bool {
+	return packages.ToolExists(p.aptGet()) && packages.ToolExists(p.dpkgQuery())
 }
 
 // MissingPackages implements packages.PackageManager by reading
@@ -139,6 +135,12 @@ func parseDpkgStatuses(out string) map[string]string {
 	return statuses
 }
 
+// installArgs is the exact argument vector executed through sudo, and
+// the source of the user-facing command text.
+func installArgs(pkgs []packages.Package) []string {
+	return append([]string{"apt-get", "install"}, packages.Names(pkgs)...)
+}
+
 // InstallCommand renders the exact command a user can copy-paste to
 // install pkgs. Install executes the same command, so the instruction
 // and the consented run cannot drift.
@@ -146,8 +148,11 @@ func InstallCommand(pkgs []packages.Package) string {
 	if len(pkgs) == 0 {
 		return ""
 	}
-	return "sudo apt-get install " + strings.Join(packages.Names(pkgs), " ")
+	return "sudo " + strings.Join(installArgs(pkgs), " ")
 }
+
+// InstallCommand implements packages.Manager.
+func (p Platform) InstallCommand(pkgs []packages.Package) string { return InstallCommand(pkgs) }
 
 // Install runs the visible, interactive apt-get install for pkgs.
 //
@@ -160,23 +165,7 @@ func (p Platform) Install(ctx context.Context, pkgs []packages.Package) error {
 	if len(pkgs) == 0 {
 		return nil
 	}
-	args := append([]string{"apt-get", "install"}, packages.Names(pkgs)...)
-	res, err := p.Runner.Run(ctx, runner.Command{
-		Name:        "sudo",
-		Args:        args,
-		Interactive: true,
-	})
-	if err != nil {
-		var exitErr runner.ErrExit
-		if errors.As(err, &exitErr) {
-			return fmt.Errorf("sudo apt-get install exited with code %d", exitErr.ExitCode)
-		}
-		return fmt.Errorf("run sudo apt-get install: %w", err)
-	}
-	if !res.OK() {
-		return fmt.Errorf("sudo apt-get install exited with code %d", res.ExitCode)
-	}
-	return nil
+	return packages.RunSudo(ctx, p.Runner, installArgs(pkgs))
 }
 
 func (p Platform) aptGet() string {
@@ -191,9 +180,4 @@ func (p Platform) dpkgQuery() string {
 		return p.DpkgQuery
 	}
 	return DefaultDpkgQuery
-}
-
-func fileExists(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && !fi.IsDir()
 }

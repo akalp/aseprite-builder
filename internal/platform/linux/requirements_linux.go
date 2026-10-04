@@ -9,42 +9,8 @@ import (
 	"time"
 
 	"github.com/akalp/aseprite-builder/internal/packages"
-	"github.com/akalp/aseprite-builder/internal/packages/apt"
 	"github.com/akalp/aseprite-builder/internal/platform"
 )
-
-// manager selects the distribution package backend for rel. Phase 3
-// supports Debian and Ubuntu through apt; other distributions fail
-// safely (nil, "") and the requirement check explains that support is
-// planned. Phase 4 extends this selection.
-func (p Platform) manager(rel packages.OSRelease) (packages.PackageManager, string) {
-	m := apt.Platform{Runner: p.Runner, OSRelease: rel}
-	if !m.Applies() {
-		return nil, ""
-	}
-	return m, "apt"
-}
-
-// selectedManager reads os-release and selects the backend.
-func (p Platform) selectedManager() (packages.PackageManager, string, error) {
-	rel, err := p.osRelease()
-	if err != nil {
-		return nil, "", err
-	}
-	mgr, name := p.manager(rel)
-	return mgr, name, nil
-}
-
-// managerInstallCommand renders the copy-paste command for pkgs under
-// the selected backend. Phase 4 extends this alongside the manager
-// set; the instruction and the consented run come from the same
-// manager implementation so they cannot drift.
-func managerInstallCommand(manager string, pkgs []packages.Package) string {
-	if manager == "apt" {
-		return apt.InstallCommand(pkgs)
-	}
-	return ""
-}
 
 // Requirements checks the distribution, the system-managed build
 // packages and free disk space. It never installs anything: missing
@@ -57,7 +23,15 @@ func (p Platform) Requirements(ctx context.Context) ([]platform.Check, error) {
 	var checks []platform.Check
 
 	rel, relErr := p.osRelease()
-	mgr, managerName := p.manager(rel)
+	var mgr packages.Manager
+	var managerName string
+	if relErr == nil {
+		var err error
+		mgr, managerName, err = p.selectManager(ctx, rel)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// 1. Distribution / package manager family.
 	switch {
@@ -66,15 +40,14 @@ func (p Platform) Requirements(ctx context.Context) ([]platform.Check, error) {
 			Name:   "Distribution",
 			OK:     false,
 			Detail: "cannot read " + p.osReleasePath(),
-			Fix:    "This release supports Debian and Ubuntu on Linux; ensure /etc/os-release is readable",
+			Fix:    "Ensure " + p.osReleasePath() + " is readable",
 		})
 	case mgr == nil:
 		checks = append(checks, platform.Check{
 			Name:   "Distribution",
 			OK:     false,
 			Detail: rel.Display(),
-			Fix: "This release of aseprite-builder supports Debian and Ubuntu on Linux; " +
-				"support for other distributions is planned.",
+			Fix:    supportedDistrosFix,
 		})
 	default:
 		checks = append(checks, platform.Check{
@@ -87,7 +60,7 @@ func (p Platform) Requirements(ctx context.Context) ([]platform.Check, error) {
 
 	// 2. System build packages (distribution-managed, spec §16).
 	if mgr != nil {
-		required := apt.RequiredPackages()
+		required := mgr.RequiredPackages()
 		label := "Build packages (" + managerName + ")"
 		missing, err := mgr.MissingPackages(ctx, required)
 		switch {
@@ -110,7 +83,7 @@ func (p Platform) Requirements(ctx context.Context) ([]platform.Check, error) {
 				Name:   label,
 				OK:     false,
 				Detail: "missing: " + strings.Join(packages.Names(missing), ", "),
-				Fix:    managerInstallCommand(managerName, missing),
+				Fix:    mgr.InstallCommand(missing),
 			})
 		}
 	}

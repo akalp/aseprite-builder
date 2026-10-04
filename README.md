@@ -12,8 +12,8 @@ directories.
 
 ## Current status
 
-The project is at the first vertical slice plus its interactive UI,
-now spanning three platforms:
+The project is at the first vertical slice plus its interactive UI, and
+supports Aseprite's major desktop build platforms:
 
 - **macOS Apple Silicon + Intel** (arm64/amd64), CLI **and TUI**.
 - **Windows 11 x64** (amd64): Microsoft toolchain detected
@@ -22,15 +22,16 @@ now spanning three platforms:
   `%LOCALAPPDATA%\Programs\Aseprite`, Start-Menu shortcut, same
   transactional updating/uninstall semantics. CLI end-to-end; the TUI
   inherits the same services.
-- **Linux Debian/Ubuntu x86_64** (amd64): distribution detected from
-  `/etc/os-release`, missing build packages reported with the exact
-  `sudo apt-get install …` command (run visibly only after your
-  explicit consent — never silently), Aseprite compiled through
-  upstream's `build.sh`, user-local install to `~/.local/opt/aseprite`,
-  `~/.local/bin/aseprite` CLI symlink plus a desktop entry and hicolor
-  icons so Aseprite shows up in the app menu. Same transactional
-  updating/uninstall semantics. Additional distributions
-  (Fedora/Arch/openSUSE/Void) are the next milestone.
+- **Linux x86_64** (amd64): distribution detected from `/etc/os-release`
+  with Debian/Ubuntu (`apt`), Fedora/RHEL (`dnf`), Arch (`pacman`),
+  openSUSE (`zypper`) and Void (`xbps`) package backends. Missing build
+  packages are reported with the exact distribution command
+  (`sudo apt-get install …`, `sudo dnf install …`, …), run visibly only
+  after your explicit consent — never silently. Aseprite is compiled
+  through upstream's `build.sh`, installed user-locally to
+  `~/.local/opt/aseprite`, with a `~/.local/bin/aseprite` CLI symlink
+  plus a desktop entry and hicolor icons so Aseprite shows up in the
+  app menu. Same transactional updating/uninstall semantics.
 - **Running `aseprite-builder` with no arguments opens the interactive
   TUI** (install / launch / update / repair / rebuild / diagnostics /
   settings / uninstall — same services as the CLI, structured progress,

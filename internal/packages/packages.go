@@ -16,8 +16,12 @@ package packages
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
+
+	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
 // Package is one distribution package the builder may need.
@@ -42,6 +46,37 @@ type PackageManager interface {
 	// implementation runs visibly and must never strip the terminal or
 	// elevate privileges silently (spec §16/§33).
 	Install(ctx context.Context, pkgs []Package) error
+}
+
+// ManagerName identifies one supported distribution package backend.
+type ManagerName string
+
+// The supported backends. These are stable identifiers used in
+// reports and diagnostics (e.g. "Build packages (apt)").
+const (
+	ManagerApt    ManagerName = "apt"
+	ManagerDnf    ManagerName = "dnf"
+	ManagerPacman ManagerName = "pacman"
+	ManagerZypper ManagerName = "zypper"
+	ManagerXbps   ManagerName = "xbps"
+)
+
+// Manager is a PackageManager that also knows its distribution's
+// package names for Aseprite's build dependencies and the exact
+// command that installs them. Selection lives in
+// internal/packages/selector; the implementations live beside this
+// package (internal/packages/apt, .../dnf, ...).
+type Manager interface {
+	PackageManager
+	// RequiredPackages returns the distribution's package names for
+	// Aseprite's documented build dependencies. Names only — never
+	// versions (the sanctioned exception to the no-version-matrices
+	// rule, spec §2/§5).
+	RequiredPackages() []Package
+	// InstallCommand renders the exact copy-paste command that
+	// installs pkgs. Install runs the same command, so the instruction
+	// and the consented run cannot drift.
+	InstallCommand(pkgs []Package) string
 }
 
 // Names returns the package names of pkgs, for commands and messages.
@@ -81,7 +116,47 @@ type OSRelease struct {
 // Ubuntu, or a derivative of either (ID or any ID_LIKE entry). Ubuntu
 // derivatives carry ID_LIKE=ubuntu, so both roots are recognized.
 func (r OSRelease) IsDebianLike() bool {
-	return matchesFamily(r, "debian") || matchesFamily(r, "ubuntu")
+	return matchesAny(r, "debian", "ubuntu")
+}
+
+// IsFedoraLike reports whether the release belongs to the Fedora/RHEL
+// family (dnf): Fedora, RHEL, CentOS, Rocky, AlmaLinux, and
+// derivatives carrying them in ID_LIKE.
+func (r OSRelease) IsFedoraLike() bool {
+	return matchesAny(r, "fedora", "rhel", "centos", "rocky", "almalinux")
+}
+
+// IsArchLike reports whether the release belongs to the Arch family
+// (pacman): Arch Linux, Manjaro, and derivatives.
+func (r OSRelease) IsArchLike() bool {
+	return matchesAny(r, "arch", "manjaro")
+}
+
+// IsSuseLike reports whether the release belongs to the openSUSE/SUSE
+// family (zypper). openSUSE IDs are compound (opensuse-leap,
+// opensuse-tumbleweed, opensuse-microos), so they are matched by
+// prefix as well as through the ID_LIKE chain.
+func (r OSRelease) IsSuseLike() bool {
+	if matchesAny(r, "suse", "sles", "opensuse") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(r.ID), "opensuse")
+}
+
+// IsVoidLike reports whether the release is Void Linux (xbps).
+func (r OSRelease) IsVoidLike() bool {
+	return matchesAny(r, "void")
+}
+
+// matchesAny reports whether id matches the release ID or any of its
+// ID_LIKE chain entries.
+func matchesAny(r OSRelease, ids ...string) bool {
+	for _, id := range ids {
+		if matchesFamily(r, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesFamily reports whether id appears as the release ID or among
@@ -167,4 +242,57 @@ func (r OSRelease) Display() string {
 	default:
 		return "unknown"
 	}
+}
+
+// ToolExists reports whether path is an existing non-directory file.
+// Managers use it for binary-presence checks; version probing is never
+// done here.
+func ToolExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
+}
+
+// MissingByExitStatus probes pkgs one by one and treats a zero exit
+// status as installed. Distribution probes (rpm -q, pacman -Qi,
+// xbps-query) signal absence through their exit status; a probe that
+// cannot even start is a real error, not a missing package.
+//
+// probe returns the executable and arguments for one package name.
+func MissingByExitStatus(ctx context.Context, r runner.Runner, pkgs []Package, probe func(name string) (string, []string)) ([]Package, error) {
+	var missing []Package
+	for _, pkg := range pkgs {
+		name, args := probe(pkg.Name)
+		res, err := r.Run(ctx, runner.Command{Name: name, Args: args})
+		var exitErr runner.ErrExit
+		switch {
+		case errors.As(err, &exitErr):
+			// Non-zero exit: the package is not installed.
+			missing = append(missing, pkg)
+		case err != nil:
+			return nil, fmt.Errorf("probe %s with %s: %w", pkg.Name, name, err)
+		case !res.OK():
+			missing = append(missing, pkg)
+		}
+	}
+	return missing, nil
+}
+
+// RunSudo runs a privileged install command visibly, with the caller's
+// terminal attached (runner.Command.Interactive), and returns an error
+// naming the full command. Callers must have obtained explicit user
+// consent before invoking it (spec §16/§33): it never prompts itself,
+// never adds an auto-confirm flag, and never captures output.
+func RunSudo(ctx context.Context, r runner.Runner, args []string) error {
+	res, err := r.Run(ctx, runner.Command{Name: "sudo", Args: args, Interactive: true})
+	full := "sudo " + strings.Join(args, " ")
+	var exitErr runner.ErrExit
+	switch {
+	case errors.As(err, &exitErr):
+		return fmt.Errorf("%s exited with code %d", full, exitErr.ExitCode)
+	case err != nil:
+		return fmt.Errorf("run %s: %w", full, err)
+	case !res.OK():
+		return fmt.Errorf("%s exited with code %d", full, res.ExitCode)
+	}
+	return nil
 }

@@ -7,14 +7,13 @@ import (
 	"fmt"
 
 	"github.com/akalp/aseprite-builder/internal/packages"
-	"github.com/akalp/aseprite-builder/internal/packages/apt"
 )
 
 // SystemPackages implements app.SystemPackageProvider: it reports the
 // missing distribution packages and the exact command to install them.
 // It is read-only and never elevates privileges.
 func (p Platform) SystemPackages(ctx context.Context) (packages.Report, error) {
-	mgr, name, err := p.selectedManager()
+	mgr, name, err := p.selectedManager(ctx)
 	if err != nil {
 		return packages.Report{}, err
 	}
@@ -23,23 +22,23 @@ func (p Platform) SystemPackages(ctx context.Context) (packages.Report, error) {
 		// package command is offered.
 		return packages.Report{}, nil
 	}
-	missing, err := mgr.MissingPackages(ctx, apt.RequiredPackages())
+	missing, err := mgr.MissingPackages(ctx, mgr.RequiredPackages())
 	if err != nil {
 		return packages.Report{}, fmt.Errorf("check required packages: %w", err)
 	}
 	report := packages.Report{Manager: name, Missing: missing}
 	if len(missing) > 0 {
-		report.Command = managerInstallCommand(name, missing)
+		report.Command = mgr.InstallCommand(missing)
 	}
 	return report, nil
 }
 
 // InstallSystemPackages implements app.SystemPackageInstaller: it runs
-// the distribution's install command through the manager, visibly and
-// with the caller's terminal attached. The caller must have explicit
-// user consent first (spec §16); this method never prompts.
+// the distribution's install command through the selected manager,
+// visibly and with the caller's terminal attached. The caller must have
+// explicit user consent first (spec §16); this method never prompts.
 func (p Platform) InstallSystemPackages(ctx context.Context, pkgs []packages.Package) error {
-	mgr, _, err := p.selectedManager()
+	mgr, _, err := p.selectedManager(ctx)
 	if err != nil {
 		return err
 	}

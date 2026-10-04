@@ -20,7 +20,8 @@ internal/cli    internal/tui            (frontends: parse/print / Bubble Tea)
         internal/dependencies, internal/aseprite build orchestration
                        ↓
         infrastructure: runner, download, archive, upstream, paths, state,
-                        logging, version, packages (apt)
+                        logging, version, packages (apt/dnf/pacman/zypper/xbps
+                        + packages/selector)
 ```
 
 - **UI never contains business logic.** `internal/cli` only parses
@@ -78,7 +79,7 @@ of aseprite-builder itself. Everything is resolved per-build:
 | Skia             | `laf/misc/skia-tag.txt` + `skia-url.sh` *executed from the extracted source* (bash) — or, on Windows where bash is absent, *parsed* from the script's own URL/asset templates and validated against the aseprite/skia asset list | cached verified extraction | the exact URL upstream's script resolves/encodes (`Skia-<OS>-Release-<cpu>.zip`) |
 | Xcode/SDK/clang  | probe commands (`internal/platform/darwin`)     | system-managed only — never installed by us      | Apple (not downloaded) |
 | Visual Studio / Build Tools / MSVC environment / Windows SDK | `vswhere.exe` (upstream build.cmd's discovery: `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` → `VC\Auxiliary\Build\vcvars64.bat`) + Windows Kits include probe; `vcvars64.bat && set` captures the build environment | system-managed only — never installed by us | Microsoft (not downloaded) |
-| Linux build packages (g++, clang, cmake, ninja-build, X11/GL/fontconfig dev libs) | `internal/packages/apt` reads `/etc/os-release` (ID/ID_LIKE) and probes the dpkg status database (`dpkg-query`); required package *names* are documented in the apt package (names only, never versions) | system-managed only: installed by the user (or, with explicit TTY consent, by the visible `sudo apt-get install …` the CLI runs) — never bundled, never elevated silently | the distribution's own repositories (spec §16) |
+| Linux build packages (gcc/g++, clang, cmake, ninja, X11/GL/fontconfig dev libs) | `internal/packages/selector` maps `/etc/os-release` (ID/ID_LIKE) to a backend — apt, dnf, pacman, zypper, xbps — falling back to probing the manager binaries for ambiguous releases; each backend probes its own database (`dpkg-query`, `rpm -q`, `pacman -Qi`, `xbps-query`) and documents the distribution's package *names* (names only, never versions) | system-managed only: installed by the user (or, with explicit TTY consent, by the visible `sudo … install …` command the CLI runs) — never bundled, never elevated silently | the distribution's own repositories (spec §16) |
 
 Downloads are verified against upstream digests when they exist
 (Aseprite source: yes, via GitHub asset digests; aseprite/skia assets
@@ -163,9 +164,11 @@ the hicolor icon theme (`data/icons`, sizes read from the PNG headers).
 `update-desktop-database`/`gtk-update-icon-cache` run best-effort.
 `launch` starts the installed executable detached (no terminal emulator
 assumed). Missing distribution packages are reported with the exact
-`sudo apt-get install …` command; the CLI runs it visibly only after
-explicit TTY consent (the TUI is instruction-only) — never silently,
-never from `--yes`.
+distribution command (`sudo apt-get install …`, `sudo dnf install …`,
+`sudo pacman -S --needed …`, `sudo zypper install …`,
+`sudo xbps-install -S …`); the CLI runs it visibly only after explicit
+TTY consent (the TUI is instruction-only) — never silently, never from
+`--yes`.
 
 ## State and logs
 
@@ -189,8 +192,9 @@ environment values are never dumped.
 Unit tests use fake runners (`runner.FakeRunner` with exact-key and
 pattern matching), fake release providers, a fake platform, and a
 fetch hook; no Aseprite compilation happens in tests. The packages
-layer (`internal/packages`, `internal/packages/apt`) is host-neutral,
-so its probes/commands are tested on every host; the linux-tagged
+layer (`internal/packages`, its backend packages, and
+`internal/packages/selector`) is host-neutral, so its probes, commands
+and the selection matrix are tested on every host; the linux-tagged
 platform suite compiles under `GOOS=linux go vet` and executes in a
 Linux container (or on a Linux host). See `DEVELOPMENT.md` for
 commands.

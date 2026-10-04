@@ -5,9 +5,9 @@ installs, updates and removes Aseprite from official source. Business and data
 layers are stdlib-only; UI dependencies (Bubble Tea / Lip Gloss) are allowed
 **only** inside `internal/tui` (spec §10, §36 — go.mod/go.sum are tracked
 normally). Supported platforms today: macOS arm64/amd64, Windows 11 x64, and
-Linux amd64 on Debian/Ubuntu (`internal/platform/{darwin,windows,linux}`,
-`internal/packages`; running with no arguments opens the TUI). Additional
-Linux distributions (dnf/pacman/zypper/xbps) are the next milestone. Docs:
+Linux amd64 on Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE and Void
+(`internal/platform/{darwin,windows,linux}`, `internal/packages`; running with
+no arguments opens the TUI). Docs:
 `docs/PROJECT_SPEC.md` (the spec — treat as binding), `docs/ARCHITECTURE.md`,
 `docs/DEVELOPMENT.md`.
 
@@ -52,7 +52,7 @@ Linux distributions (dnf/pacman/zypper/xbps) are the next milestone. Docs:
   `internal/archtest`); `internal/app` must gain zero UI imports.
 - Dependency direction: `cmd → internal/{cli,tui} → internal/app →
   internal/{aseprite,platform} → infra (runner, download, archive, upstream,
-  paths, state, packages/apt)`.
+  paths, state, packages/{apt,dnf,pacman,zypper,xbps} + packages/selector)`.
 
 ## Testing rules
 

@@ -82,6 +82,11 @@ type Platform struct {
 	Logger func(format string, args ...any)
 	// Now overrides wall-clock time in tests.
 	Now func() time.Time
+	// managerOverride replaces the constructed package-manager set in
+	// tests, pointing the managers at fabricated tool paths so backend
+	// selection is deterministic on any host. nil in production (the
+	// standard system locations are used).
+	managerOverride map[packages.ManagerName]packages.Manager
 }
 
 // New returns a Linux Platform with the default user-local locations.

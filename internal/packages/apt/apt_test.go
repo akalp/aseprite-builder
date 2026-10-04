@@ -12,9 +12,6 @@ import (
 	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
-// ubuntuRelease is the fixture used for the apt-applicable cases.
-var ubuntuRelease = packages.OSRelease{ID: "ubuntu", IDLike: []string{"debian"}, VersionID: "24.04"}
-
 func fakeTools(t *testing.T) (aptGet, dpkgQuery string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -28,22 +25,24 @@ func fakeTools(t *testing.T) (aptGet, dpkgQuery string) {
 	return aptGet, dpkgQuery
 }
 
-func TestDetectRequiresDebianLikeAndTools(t *testing.T) {
+func TestDetectRequiresTools(t *testing.T) {
+	// Family applicability is the selector's job; apt.Detect is a pure
+	// binary-presence check.
 	aptGet, dpkgQuery := fakeTools(t)
-	p := Platform{Runner: &runner.FakeRunner{}, APTGet: aptGet, DpkgQuery: dpkgQuery, OSRelease: ubuntuRelease}
+	p := Platform{Runner: &runner.FakeRunner{}, APTGet: aptGet, DpkgQuery: dpkgQuery}
 	if !p.Detect(context.Background()) {
-		t.Error("Debian-like release with apt tools must detect")
+		t.Error("apt tools present must detect")
 	}
 
-	p.OSRelease = packages.OSRelease{ID: "fedora"}
-	if p.Detect(context.Background()) {
-		t.Error("fedora must not use the apt backend")
-	}
-
-	p.OSRelease = ubuntuRelease
 	p.DpkgQuery = filepath.Join(t.TempDir(), "missing")
 	if p.Detect(context.Background()) {
 		t.Error("missing dpkg-query must not detect")
+	}
+
+	p.DpkgQuery = dpkgQuery
+	p.APTGet = filepath.Join(t.TempDir(), "missing")
+	if p.Detect(context.Background()) {
+		t.Error("missing apt-get must not detect")
 	}
 }
 
@@ -86,7 +85,6 @@ func TestMissingPackagesReadsDpkgStatus(t *testing.T) {
 		Runner:    f,
 		APTGet:    "/usr/bin/apt-get",
 		DpkgQuery: "/usr/bin/dpkg-query",
-		OSRelease: ubuntuRelease,
 	}
 	wanted := []packages.Package{
 		{Name: "g++", What: "C++ compiler"},
@@ -112,7 +110,7 @@ func TestMissingPackagesStartFailureIsFatal(t *testing.T) {
 	f := &runner.FakeRunner{Errs: map[string]error{
 		"/usr/bin/dpkg-query -W -f=${binary:Package}\t${db:Status-Status}\n g++": errors.New("exec: not found"),
 	}}
-	p := Platform{Runner: f, DpkgQuery: "/usr/bin/dpkg-query", OSRelease: ubuntuRelease}
+	p := Platform{Runner: f, DpkgQuery: "/usr/bin/dpkg-query"}
 	if _, err := p.MissingPackages(context.Background(), []packages.Package{{Name: "g++"}}); err == nil {
 		t.Fatal("a start failure must surface as an error")
 	}
@@ -132,7 +130,7 @@ func TestInstallCommand(t *testing.T) {
 
 func TestInstallRunsVisibleInteractiveSudo(t *testing.T) {
 	f := &runner.FakeRunner{}
-	p := Platform{Runner: f, APTGet: "/usr/bin/apt-get", DpkgQuery: "/usr/bin/dpkg-query", OSRelease: ubuntuRelease}
+	p := Platform{Runner: f, APTGet: "/usr/bin/apt-get", DpkgQuery: "/usr/bin/dpkg-query"}
 	pkgs := []packages.Package{{Name: "g++"}, {Name: "cmake"}}
 	if err := p.Install(context.Background(), pkgs); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -175,5 +173,16 @@ func TestInstallExitCodeSurfaces(t *testing.T) {
 	err := p.Install(context.Background(), []packages.Package{{Name: "cmake"}})
 	if err == nil || !strings.Contains(err.Error(), "code 100") {
 		t.Errorf("err = %v, want exit-code context", err)
+	}
+}
+
+func TestManagerMethodsMatchPackageFunctions(t *testing.T) {
+	p := Platform{}
+	if got := p.RequiredPackages(); len(got) != len(RequiredPackages()) {
+		t.Errorf("method table = %d entries, func table = %d", len(got), len(RequiredPackages()))
+	}
+	pkgs := []packages.Package{{Name: "cmake"}}
+	if got := p.InstallCommand(pkgs); got != InstallCommand(pkgs) {
+		t.Errorf("method command = %q, func command = %q", got, InstallCommand(pkgs))
 	}
 }

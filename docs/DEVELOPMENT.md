@@ -4,7 +4,8 @@
 
 - Go 1.24+
 - macOS is the primary development host. The macOS slice is
-  implemented; Windows x64 and Linux (Debian/Ubuntu amd64) are
+  implemented; Windows x64 and Linux x86_64 (Debian/Ubuntu, Fedora/RHEL,
+  Arch, openSUSE, Void) are
   implemented and cross-checked from macOS (`GOOS=… go vet`, plus a
   Linux container for executing the linux-tagged tests).
 
