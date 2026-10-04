@@ -1,5 +1,7 @@
 # aseprite-builder
 
+[![CI](https://github.com/akalp/aseprite-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/akalp/aseprite-builder/actions/workflows/ci.yml)
+
 `aseprite-builder` is an **unofficial** third-party tool that builds,
 installs, updates, repairs and removes the open-source [Aseprite]
 sprite editor from its official source code — without requiring you to
@@ -30,6 +32,13 @@ aseprite-builder_Linux_x86_64.tar.gz   (Linux x86_64)
 Download the archive for your platform, unpack the single executable,
 and run it — no installer, no third-party runtime, no build tools
 needed just to start.
+
+Latest release:
+[v0.1.0](https://github.com/akalp/aseprite-builder/releases/tag/v0.1.0).
+macOS arm64 has been verified end-to-end; Windows, Linux and Intel
+macOS real-host verification is tracked in
+[issue #1](https://github.com/akalp/aseprite-builder/issues/1) — bug
+reports are very welcome.
 
 Maintainers: `make release` cross-compiles and packs the same four
 artifacts into `dist/` locally and runs the §38 checker;
