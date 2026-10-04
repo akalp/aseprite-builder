@@ -142,12 +142,17 @@ func (r ConcreteRunner) Run(ctx context.Context, cmd Command) (Result, error) {
 	duration := time.Since(start)
 	if exitErr, ok := err.(*exec.ExitError); ok { //nolint:errorlint // exec.ExitError is precise enough here
 		code := exitErr.ExitCode()
-		return Result{
+		// Split from the ErrExit literal below: a multi-value return
+		// with two multi-line composite literals is formatted
+		// differently by different gofmt versions (1.24 vs 1.25+), and
+		// CI pins the go.mod toolchain while dev machines may be newer.
+		res := Result{
 			Stdout:   stdout.String(),
 			Stderr:   stderr.String(),
 			ExitCode: code,
 			Duration: duration,
-		}, ErrExit{
+		}
+		return res, ErrExit{
 			ExitCode: code,
 			Cmd:      cmd.String(),
 			Stdout:   stdout.String(),

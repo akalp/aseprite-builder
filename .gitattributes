@@ -1,0 +1,7 @@
+# Check out Go sources with LF line endings on every platform, so
+# gofmt output is identical in CI (Windows checkouts) and locally.
+*.go text eol=lf
+
+# Generated archive fixtures and testdata stay byte-exact.
+*.tar.gz binary
+*.zip binary
