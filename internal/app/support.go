@@ -21,12 +21,18 @@ func stateChannelOrDefault(c string) aseprite.Channel {
 
 // verifyInstalledBundle checks the installed application. The platform
 // resolves the executable shape (plain directory on Windows); the
-// fallback is the .app bundle layout.
+// fallback is the .app bundle layout. Development installs assert that
+// the executable runs but not the version, because dev builds report
+// their own upstream version.
 func (s *Service) verifyInstalledBundle(ctx context.Context, current state.InstallState, log *logging.Logger) error {
+	wantVersion := current.AsepriteVersion
+	if stateChannelOrDefault(current.Channel) == aseprite.ChannelDev {
+		wantVersion = ""
+	}
 	if p, ok := s.opts.Platform.(platform.InstalledExecutableProvider); ok {
 		exe, err := p.InstalledExecutable()
 		if err == nil {
-			err = aseprite.VerifyExecutable(ctx, s.opts.Runner, exe, current.AsepriteVersion)
+			err = aseprite.VerifyExecutable(ctx, s.opts.Runner, exe, wantVersion)
 		}
 		if err != nil {
 			log.Line("repair: installed executable verification failed: %v", err)
@@ -34,7 +40,7 @@ func (s *Service) verifyInstalledBundle(ctx context.Context, current state.Insta
 		}
 		return nil
 	}
-	if err := aseprite.VerifyInstalled(ctx, s.opts.Runner, current.AppPath, current.AsepriteVersion); err != nil {
+	if err := aseprite.VerifyInstalled(ctx, s.opts.Runner, current.AppPath, wantVersion); err != nil {
 		log.Line("repair: installed bundle verification failed: %v", err)
 		return err
 	}

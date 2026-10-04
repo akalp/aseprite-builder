@@ -126,14 +126,27 @@ func TestResolveUnsupportedChannel(t *testing.T) {
 }
 
 func TestParseChannel(t *testing.T) {
-	if c, err := ParseChannel("stable"); err != nil || c != ChannelStable {
-		t.Errorf("ParseChannel(stable) = %q, %v", c, err)
+	cases := []struct {
+		in      string
+		want    Channel
+		wantErr bool
+	}{
+		{"stable", ChannelStable, false},
+		{"", ChannelStable, false},
+		{"STABLE", ChannelStable, false},
+		{"dev", ChannelDev, false},
+		{" development ", ChannelDev, false},
+		{"beta", ChannelStable, true},
 	}
-	if c, err := ParseChannel(""); err != nil || c != ChannelStable {
-		t.Errorf("ParseChannel('') = %q, %v", c, err)
-	}
-	if _, err := ParseChannel("beta"); err == nil {
-		t.Error("ParseChannel(beta) should fail: only stable is supported")
+	for _, c := range cases {
+		got, err := ParseChannel(c.in)
+		if (err != nil) != c.wantErr {
+			t.Errorf("ParseChannel(%q) err = %v, wantErr %v", c.in, err, c.wantErr)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParseChannel(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 

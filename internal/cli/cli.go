@@ -243,9 +243,20 @@ func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
 		return int(exitCode(1))
 	}
 
+	// An empty --channel lets the persisted preference (set in the TUI
+	// settings screen) decide; an explicit flag always wins.
+	var channel aseprite.Channel
+	if raw := strings.TrimSpace(*v.Channel); raw != "" {
+		ch, err := aseprite.ParseChannel(raw)
+		if err != nil {
+			c.printServiceError(err)
+			return int(exitCode(2))
+		}
+		channel = ch
+	}
 	opts := app.InstallOptions{
 		Version:               strings.TrimSpace(*v.Version),
-		Channel:               aseprite.ChannelStable,
+		Channel:               channel,
 		ForceOverwriteUnowned: *v.Force,
 		LaunchAfterInstall:    *v.Launch,
 		KeepWorkspace:         *v.KeepWorkspace,

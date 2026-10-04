@@ -41,6 +41,49 @@ type Release struct {
 	SHA256 string
 	// AssetSize is the byte size of the source archive when known.
 	AssetSize int64
+	// Commit is the explicit development-channel commit SHA this
+	// release tracks ("" for stable releases).
+	Commit string
+}
+
+// DevCommit reports whether this release tracks an explicit commit
+// (development channel) instead of a stable release archive.
+func (r Release) DevCommit() bool { return r.Commit != "" }
+
+// BuildVersion is the version string used for the source tree name,
+// logs and install state: the dotted release version for stable, or
+// "dev-<short>" for a development commit. Development builds report
+// their own upstream version at runtime, so this is a builder-side
+// identifier, not a version assertion.
+func (r Release) BuildVersion() string {
+	if r.Commit != "" {
+		return "dev-" + ShortCommit(r.Commit)
+	}
+	return r.Version.String()
+}
+
+// ShortCommit returns the 7-character display form of a commit SHA.
+func ShortCommit(commit string) string {
+	if len(commit) > 7 {
+		return commit[:7]
+	}
+	return commit
+}
+
+// ValidCommit reports whether s is a plausible git commit SHA:
+// 7-40 hexadecimal characters.
+func ValidCommit(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // SourceAssetName returns the expected source.zip asset name for this
@@ -56,5 +99,8 @@ func (r Release) Stable() bool { return !r.PreRelease && !r.Draft }
 
 // String renders a human-readable summary used in logs.
 func (r Release) String() string {
+	if r.Commit != "" {
+		return "Aseprite development commit " + ShortCommit(r.Commit)
+	}
 	return fmt.Sprintf("Aseprite %s (%s)", r.Version, r.TagName)
 }

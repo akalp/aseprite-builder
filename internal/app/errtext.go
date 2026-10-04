@@ -47,6 +47,17 @@ func FriendlyMessage(err error) string {
 		return "This Aseprite version is already installed."
 	case errors.Is(err, ErrNotInstalled):
 		return "This command needs an aseprite-builder installation (run install first)."
+	case errors.Is(err, ErrDevCommitRequired):
+		return "The development channel tracks an explicit commit. Install with:\n" +
+			"  aseprite-builder install --channel dev --version <commit-sha>"
+	case errors.Is(err, ErrDevUpdateUnsupported):
+		return "This installation tracks a development commit; 'update' only follows stable\n" +
+			"releases. Move to a new commit with:\n" +
+			"  aseprite-builder install --channel dev --version <commit-sha>"
+	case errors.Is(err, aseprite.ErrGitRequired):
+		return "The development channel requires Git, which was not found on this machine.\n" +
+			"Install Git, or use the stable channel (no Git required):\n" +
+			"  aseprite-builder install --channel stable"
 	default:
 		var buildErr *aseprite.UpstreamBuildError
 		if errors.As(err, &buildErr) {

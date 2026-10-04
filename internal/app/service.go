@@ -144,7 +144,10 @@ func New(opts Options) (*Service, error) {
 type InstallOptions struct {
 	// Version pins an exact Aseprite version ("" → latest stable).
 	Version string
-	// Channel is stable today.
+	// Commit is the explicit development-channel commit; required when
+	// Channel is dev, ignored otherwise.
+	Commit string
+	// Channel is stable (default) or dev.
 	Channel aseprite.Channel
 	// ForceOverwriteUnowned allows replacing an Aseprite.app this
 	// builder cannot prove it owns (explicit user consent).
@@ -178,6 +181,12 @@ var (
 	ErrSystemRequirements = errors.New("system requirements are not met")
 	// ErrUnknownContract: the upstream build contract is unrecognized.
 	ErrUnknownContract = errors.New("unrecognized upstream build contract")
+	// ErrDevCommitRequired: the development channel needs an explicit
+	// commit to track.
+	ErrDevCommitRequired = errors.New("the development channel requires an explicit commit")
+	// ErrDevUpdateUnsupported: update cannot move a development-channel
+	// install, because dev installs track an explicit commit.
+	ErrDevUpdateUnsupported = errors.New("development-channel installs track an explicit commit and are not updated by 'update'")
 )
 
 // SystemRequirementsError carries the failing checks to the CLI.
@@ -280,13 +289,17 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 	}
 
 	// 3. Resolve release ------------------------------------------------
-	sink.emit(ProgressEvent{Stage: StageResolveRelease, Message: "Resolving latest stable Aseprite release"})
+	resolveMsg := "Resolving latest stable Aseprite release"
+	if opts.Channel == aseprite.ChannelDev {
+		resolveMsg = "Resolving development commit"
+	}
+	sink.emit(ProgressEvent{Stage: StageResolveRelease, Message: resolveMsg})
 	rel, err := s.resolveRelease(ctx, opts)
 	if err != nil {
 		return result, err
 	}
 	log.Line("resolved release: %s", rel.String())
-	result.Version = rel.Version.String()
+	result.Version = rel.BuildVersion()
 	result.Workspace = s.opts.Layout.SourceTreeDir(result.Version)
 
 	// 4/5. Source acquisition + contract inspection ---------------------
@@ -357,7 +370,15 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 
 	// 10. Verify ------------------------------------------------------------
 	sink.emit(ProgressEvent{Stage: StageVerify, Message: "Verifying the compiled executable"})
-	if err := aseprite.VerifyBuild(ctx, s.opts.Runner, buildOut, result.Version); err != nil {
+	wantVersion := result.Version
+	if rel.DevCommit() {
+		// Development builds report their own upstream version
+		// (e.g. "1.3.19-dev"), not the builder-side dev-<sha>
+		// identifier: assert the executable runs, skip the exact match.
+		log.Line("development build: asserting the executable runs; exact version match skipped")
+		wantVersion = ""
+	}
+	if err := aseprite.VerifyBuild(ctx, s.opts.Runner, buildOut, wantVersion); err != nil {
 		return result, fmt.Errorf("verification failed: %w", err)
 	}
 	log.Line("verification succeeded")
@@ -390,6 +411,7 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 		AsepriteVersion: result.Version,
 		TagName:         rel.TagName,
 		Channel:         string(opts.Channel),
+		CommitSHA:       rel.Commit,
 		SourceURL:       rel.SourceURL,
 		SourceSHA256:    rel.SHA256,
 		SkiaTag:         provisioned.Contract.SkiaTag,
@@ -424,8 +446,18 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 }
 
 // resolveRelease picks the release to build: the pinned version when
-// requested, otherwise the latest stable release upstream.
+// requested, otherwise the latest stable release upstream. The
+// development channel tracks an explicit commit instead.
 func (s *Service) resolveRelease(ctx context.Context, opts InstallOptions) (aseprite.Release, error) {
+	if opts.Channel == aseprite.ChannelDev {
+		commit := opts.Commit
+		if commit == "" {
+			// On the CLI, --version carries the commit for the dev
+			// channel (the channel disambiguates).
+			commit = opts.Version
+		}
+		return resolveDevRelease(commit)
+	}
 	if opts.Version == "" {
 		rel, err := s.opts.Releases.Resolve(ctx, opts.Channel)
 		if err != nil {
@@ -447,6 +479,23 @@ func (s *Service) resolveRelease(ctx context.Context, opts InstallOptions) (asep
 		}
 	}
 	return aseprite.Release{}, fmt.Errorf("Aseprite release %s not found in the official stable releases", opts.Version)
+}
+
+// resolveDevRelease validates the explicit development commit the user
+// asked to track. Dev releases never consult the GitHub releases API.
+func resolveDevRelease(commit string) (aseprite.Release, error) {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return aseprite.Release{}, ErrDevCommitRequired
+	}
+	if !aseprite.ValidCommit(commit) {
+		return aseprite.Release{}, fmt.Errorf("invalid development commit %q: expected 7-40 hex characters", commit)
+	}
+	return aseprite.Release{
+		Commit:    commit,
+		TagName:   "dev-" + aseprite.ShortCommit(commit),
+		SourceURL: aseprite.OfficialRepoURL,
+	}, nil
 }
 
 // provisionResult bundles what source provisioning produces.
@@ -494,12 +543,20 @@ func (f downloaderFetcher) Fetch(ctx context.Context, src, dst, sha string, prog
 // build orchestration needs contract facts (Skia naming, CMake
 // minimum) even when the tree is cached.
 func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, info platform.SystemInfo, sink ProgressSink, log *logging.Logger) (provisionResult, error) {
-	sink.emit(ProgressEvent{Stage: StageFetchSource, Message: "Downloading official source archive"})
-
-	sourceDir := s.opts.Layout.SourceTreeDir(rel.Version.String())
+	sourceDir := s.opts.Layout.SourceTreeDir(rel.BuildVersion())
 	reused := true
-	if _, statErr := os.Stat(filepath.Join(sourceDir, "CMakeLists.txt")); statErr != nil {
+	if rel.DevCommit() {
+		// Development channel: materialize the explicit commit through
+		// Git instead of downloading a release archive.
 		reused = false
+		sink.emit(ProgressEvent{Stage: StageFetchSource, Message: "Checking out development commit " + aseprite.ShortCommit(rel.Commit)})
+		git := aseprite.GitCommitSource{Runner: s.opts.Runner, Log: log.Line}
+		if err := git.Ensure(ctx, rel.Commit, sourceDir); err != nil {
+			return provisionResult{}, err
+		}
+	} else if _, statErr := os.Stat(filepath.Join(sourceDir, "CMakeLists.txt")); statErr != nil {
+		reused = false
+		sink.emit(ProgressEvent{Stage: StageFetchSource, Message: "Downloading official source archive"})
 		if err := os.MkdirAll(s.opts.Layout.Downloads, 0o755); err != nil {
 			return provisionResult{}, err
 		}
@@ -537,14 +594,18 @@ func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, inf
 	}, nil
 }
 
-// noteVerification records when a source archive is downloaded without
-// an authoritative digest (e.g. rate-limit fallback), so the install
-// log always states the verification level honestly.
+// noteVerification records how the source was verified (or why an
+// authoritative digest does not apply), so the install log always
+// states the verification level honestly.
 func (s *Service) noteVerification(rel aseprite.Release, log *logging.Logger) {
-	if rel.SHA256 == "" {
+	switch {
+	case rel.DevCommit():
+		log.Line("development channel: commit %s checked out from the official repository; "+
+			"no archive digest applies (integrity is enforced by the git checkout and contract inspection)", rel.Commit)
+	case rel.SHA256 == "":
 		log.Line("note: source downloaded without an authoritative digest (upstream metadata did not provide one); " +
 			"integrity is still enforced by contract inspection before building")
-	} else {
+	default:
 		log.Line("source digest verified: sha256:%s", shortestDigest(rel.SHA256))
 	}
 }

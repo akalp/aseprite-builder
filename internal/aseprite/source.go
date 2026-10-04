@@ -20,23 +20,27 @@ const asepriteRepo = "aseprite/aseprite"
 
 // Channel identifies the distribution channel of Aseprite source.
 //
-// Only the stable channel is supported by the current implementation.
-// Betas upstream are pre-release tags which the version parser does not
-// accept as stable versions; adding more channels later means extending
-// this type, not reworking the whole source-resolution layer.
+// Stable tracks the official release archives and never requires Git
+// (spec §14). The development channel tracks an explicit commit of the
+// official repository and requires Git.
 type Channel string
 
-// ChannelStable is the default and currently only supported channel.
+// ChannelStable is the default channel: official stable releases.
 const ChannelStable Channel = "stable"
 
-// ParseChannel normalizes a channel string; anything except "stable"
-// is unsupported and reported by the caller.
+// ChannelDev tracks an explicit commit of the official repository.
+const ChannelDev Channel = "dev"
+
+// ParseChannel normalizes a channel string; unknown values are
+// reported by the caller.
 func ParseChannel(s string) (Channel, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "stable", "":
 		return ChannelStable, nil
+	case "dev", "development":
+		return ChannelDev, nil
 	default:
-		return ChannelStable, fmt.Errorf("unsupported channel %q: only %q is supported", s, ChannelStable)
+		return ChannelStable, fmt.Errorf("unsupported channel %q: use %q or %q", s, ChannelStable, ChannelDev)
 	}
 }
 

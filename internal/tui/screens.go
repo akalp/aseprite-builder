@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/akalp/aseprite-builder/internal/app"
+	"github.com/akalp/aseprite-builder/internal/aseprite"
 )
 
 // --- styles ----------------------------------------------------------------
@@ -182,6 +183,12 @@ func (m *Model) viewHome() string {
 		labels = append(labels, it.label)
 	}
 	lines = append(lines, "", menu(labels, m.homeIdx))
+	if m.devActive {
+		lines = append(lines, "",
+			"Commit to install (development channel, e.g. abc1234):",
+			inputStyle.Render("> "+m.devCommit+"_"),
+			"enter: continue · esc: back")
+	}
 	return lipglossJoin(lines)
 }
 
@@ -228,9 +235,12 @@ func (m *Model) viewSystemCheck() string {
 
 func (m *Model) viewInstallOptions() string {
 	target := "the latest stable release"
-	if v := m.req.install.Version; v != "" {
-		target = "Aseprite " + v + " (pinned)"
-	} else if m.latest != "" {
+	switch {
+	case m.req.install.Channel == aseprite.ChannelDev && m.req.install.Commit != "":
+		target = "Aseprite development commit " + aseprite.ShortCommit(m.req.install.Commit)
+	case m.req.install.Version != "":
+		target = "Aseprite " + m.req.install.Version + " (pinned)"
+	case m.latest != "":
 		target = "Aseprite " + m.latest + " (latest stable)"
 	}
 
@@ -377,15 +387,14 @@ func (m *Model) viewSettings() string {
 			labels = append(labels, toggleLabel(it.label, m.cfg.KeepWorkspace))
 		case "Verbose operation logs":
 			labels = append(labels, toggleLabel(it.label, m.cfg.Verbose))
+		case "Release channel":
+			labels = append(labels, "Release channel: "+channelLabel(m.channelPref()))
 		default:
 			labels = append(labels, it.label)
 		}
 	}
 	return lipglossJoin([]string{
 		headingStyle.Render("Settings"),
-		"",
-		"Channel: stable",
-		detailStyle.Render("  (the development channel arrives with a later phase)"),
 		"",
 		menu(labels, m.cfgIdx),
 	})

@@ -20,8 +20,11 @@ type InstallState struct {
 	AsepriteVersion string `json:"aseprite_version"`
 	// TagName is the upstream release tag ("v1.3.18.6").
 	TagName string `json:"tag_name"`
-	// Channel records which channel was installed (stable today).
+	// Channel records which channel was installed ("stable" or "dev").
 	Channel string `json:"channel"`
+	// CommitSHA is the explicit development-channel commit for dev
+	// installs ("" for stable releases).
+	CommitSHA string `json:"commit_sha,omitempty"`
 	// SourceURL is where the source archive came from.
 	SourceURL string `json:"source_url"`
 	// SourceSHA256 is the verified source archive digest (may be empty

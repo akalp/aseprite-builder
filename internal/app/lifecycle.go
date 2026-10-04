@@ -32,6 +32,15 @@ func (s *Service) Update(ctx context.Context, opts InstallOptions, sink Progress
 	defer func() { _ = log.Close() }()
 	log.Line("update: installed=%s", current.AsepriteVersion)
 
+	// Updates follow the installed channel: stable installs track the
+	// latest stable release; development installs track an explicit
+	// commit and are never silently moved onto another channel or
+	// commit (spec §14).
+	opts.Channel = stateChannelOrDefault(current.Channel)
+	if opts.Channel == aseprite.ChannelDev {
+		return InstallResult{}, ErrDevUpdateUnsupported
+	}
+
 	// Resolve the release first so "nothing newer" short-circuits
 	// before any build work happens.
 	target, err := s.resolveRelease(ctx, opts)
@@ -83,9 +92,13 @@ func (s *Service) Rebuild(ctx context.Context, opts RebuildOptions, sink Progres
 	log.Line("rebuild: version=%s clean=%v", current.AsepriteVersion, opts.Clean)
 
 	installOpts := InstallOptions{
-		Version:               current.AsepriteVersion,
 		Channel:               stateChannelOrDefault(current.Channel),
 		ForceOverwriteUnowned: true, // target is (or was) builder-owned
+	}
+	if installOpts.Channel == aseprite.ChannelDev {
+		installOpts.Commit = current.CommitSHA
+	} else {
+		installOpts.Version = current.AsepriteVersion
 	}
 	if opts.Clean {
 		// Discard previous build output AND the extracted source tree so
@@ -135,9 +148,13 @@ func (s *Service) Repair(ctx context.Context, sink ProgressSink) (InstallResult,
 
 	log.Line("repair: installation is damaged; rebuilding %s", current.AsepriteVersion)
 	installOpts := InstallOptions{
-		Version:               current.AsepriteVersion,
 		Channel:               stateChannelOrDefault(current.Channel),
 		ForceOverwriteUnowned: true,
+	}
+	if installOpts.Channel == aseprite.ChannelDev {
+		installOpts.Commit = current.CommitSHA
+	} else {
+		installOpts.Version = current.AsepriteVersion
 	}
 	cfg := s.runConfig()
 	applyRunConfig(&installOpts, cfg)

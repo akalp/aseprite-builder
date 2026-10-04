@@ -181,6 +181,50 @@ func TestInstallRequirementsFailure(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsUnknownChannel(t *testing.T) {
+	c, _, stderr := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	code := c.Run(context.Background(), []string{"install", "--yes", "--channel", "beta"})
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "unsupported channel") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+func TestInstallDevChannelRoutesToCommitSource(t *testing.T) {
+	// --channel dev --version <sha> must never hit the stable release
+	// provider (this harness serves no releases); it attempts the git
+	// checkout and then fails on the empty fixture tree with the
+	// unknown-contract message. That proves the development path ran.
+	c, _, stderr := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	code := c.Run(context.Background(), []string{
+		"install", "--yes", "--channel", "dev",
+		"--version", "abc1234def5678901234567890abcdef12345678",
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "does not recognize") {
+		t.Errorf("stderr = %q, want the unknown-contract message", out)
+	}
+	if strings.Contains(out, "unsupported channel") || strings.Contains(out, "no releases") {
+		t.Errorf("dev install must not consult the stable release provider: %q", out)
+	}
+}
+
+func TestInstallDevChannelRequiresCommit(t *testing.T) {
+	c, _, stderr := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
+	code := c.Run(context.Background(), []string{"install", "--yes", "--channel", "dev"})
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "--channel dev --version") {
+		t.Errorf("stderr = %q, want the explicit-commit guidance", stderr.String())
+	}
+}
+
 func TestDoctorJSON(t *testing.T) {
 	c, stdout, _ := newFakeCLI(t, newCLITestService(t, &cliFakePlatform{}))
 	code := c.Run(context.Background(), []string{"doctor", "--json"})

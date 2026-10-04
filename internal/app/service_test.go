@@ -79,12 +79,11 @@ func (f fakeReleases) List(context.Context, aseprite.Channel) ([]aseprite.Releas
 	return f.releases, nil
 }
 
-// fixtureSourceZip builds a zip mimicking the official Aseprite source
-// archive layout (flat, with the contract markers). No Aseprite code
-// compiles here: the entries are stand-ins.
-func fixtureSourceZip(t *testing.T, version string) []byte {
-	t.Helper()
-	files := map[string]string{
+// fixtureSourceFiles is the stand-in official source tree shared by the
+// archive-based and git-checkout-based tests (no Aseprite code compiles
+// here).
+func fixtureSourceFiles() map[string]string {
+	return map[string]string{
 		"EULA.txt":                "license",
 		".gitmodules":             "[submodule \"laf\"]",
 		"build.sh":                "#!/usr/bin/env bash\necho build",
@@ -97,6 +96,13 @@ func fixtureSourceZip(t *testing.T, version string) []byte {
 		"src/main/osx/Info.plist": "<plist/>",
 		"src/CMakeLists.txt":      "${CMAKE_BINARY_DIR}/bin/Aseprite.app/Contents/Resources/data\n",
 	}
+}
+
+// fixtureSourceZip builds a zip mimicking the official Aseprite source
+// archive layout (flat, with the contract markers).
+func fixtureSourceZip(t *testing.T, version string) []byte {
+	t.Helper()
+	files := fixtureSourceFiles()
 	end := filepath.Join(t.TempDir(), "src.zip")
 	f, err := os.Create(end)
 	if err != nil {
@@ -123,6 +129,21 @@ func fixtureSourceZip(t *testing.T, version string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// materializeSourceFixture writes the fixture source tree directly, as
+// a development-channel git checkout would leave it.
+func materializeSourceFixture(t *testing.T, dir string) {
+	t.Helper()
+	for name, content := range fixtureSourceFiles() {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // newTestService wires a Service with all fakes.
@@ -176,7 +197,33 @@ func mustVer(s string) aseprite.Version {
 // produce. The --version probe of the produced executable succeeds too.
 func wireBuildFake(t *testing.T, fk *runner.FakeRunner, sourcesDir string, version string) {
 	t.Helper()
+	fk.Match = buildFakeMatcher(t, version)
+}
+
+// wireDevBuildFake layers the git surface the development channel uses
+// on top of the build fake: git is present and the checkout's HEAD
+// already matches commit (the reuse path). The caller materializes the
+// source fixture itself.
+func wireDevBuildFake(t *testing.T, fk *runner.FakeRunner, commit, version string) {
+	t.Helper()
+	build := buildFakeMatcher(t, version)
 	fk.Match = func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "git" {
+			switch {
+			case len(c.Args) == 1 && c.Args[0] == "--version":
+				return runner.Result{Stdout: "git version 2.47.0\n"}, true
+			case len(c.Args) >= 3 && c.Args[2] == "rev-parse":
+				return runner.Result{Stdout: commit + "\n"}, true
+			}
+			return runner.Result{}, false
+		}
+		return build(c)
+	}
+}
+
+// buildFakeMatcher returns the matcher used by wireBuildFake.
+func buildFakeMatcher(t *testing.T, version string) func(runner.Command) (runner.Result, bool) {
+	return func(c runner.Command) (runner.Result, bool) {
 		// Upstream build.sh invocation
 		if c.Name == "bash" && len(c.Args) == 3 && strings.HasSuffix(c.Args[0], "build.sh") {
 			srcDir := filepath.Dir(c.Args[0])

@@ -5,6 +5,7 @@ import "flag"
 // installFlagValues binds install's flags for the command handler.
 type installFlagValues struct {
 	Version       *string
+	Channel       *string
 	Yes           *bool
 	Force         *bool
 	Launch        *bool
@@ -16,7 +17,8 @@ type installFlagValues struct {
 func installFlags() (*flag.FlagSet, *installFlagValues) {
 	fs := newFlagSet("install")
 	v := &installFlagValues{
-		Version:       fs.String("version", "", "pin an exact Aseprite version (e.g. 1.3.18.6)"),
+		Version:       fs.String("version", "", "pin an exact Aseprite version, or a commit SHA for --channel dev (e.g. 1.3.18.6)"),
+		Channel:       fs.String("channel", "", "release channel: stable (default) or dev (requires Git)"),
 		Yes:           fs.Bool("yes", false, "skip the confirmation prompt"),
 		Force:         fs.Bool("force", false, "replace an Aseprite.app not installed by this tool"),
 		Launch:        fs.Bool("launch", false, "launch Aseprite after a successful install"),

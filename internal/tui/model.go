@@ -191,6 +191,10 @@ type Model struct {
 	pinned    string
 	pinActive bool
 
+	// Development channel: home prompts for the explicit commit.
+	devCommit string
+	devActive bool
+
 	confirm confirmState
 	errSt   errorState
 	opRes   resultState
@@ -416,6 +420,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.acknowledgeNotice()
 
 	case scrHome:
+		if m.devActive {
+			return m.handleDevKey(msg)
+		}
 		switch key {
 		case "up", "k":
 			if m.homeIdx > 0 {
@@ -749,15 +756,41 @@ func updateConfirmBody(m *Model) string {
 	return "Installs the latest stable Aseprite (" + target + ") over the\ncurrent installation (" + current + ").\nThe working version is kept until the new build verifies."
 }
 
-// channelStable names the only supported channel for now; the
-// development channel arrives with its backend in a later phase.
-func channelStable() aseprite.Channel { return aseprite.ChannelStable }
+// channelPref returns the configured channel for new installs,
+// defaulting to stable for unset or unreadable values.
+func (m *Model) channelPref() aseprite.Channel {
+	ch, err := aseprite.ParseChannel(m.cfg.Channel)
+	if err != nil {
+		return aseprite.ChannelStable
+	}
+	return ch
+}
+
+// channelLabel renders the channel for the settings screen.
+func channelLabel(ch aseprite.Channel) string {
+	if ch == aseprite.ChannelDev {
+		return "dev (explicit commit, requires Git)"
+	}
+	return "stable"
+}
+
+// beginInstall starts a normal install. The development channel tracks
+// an explicit commit (spec §14), so it opens a commit prompt first
+// instead of installing blind.
+func (m *Model) beginInstall() tea.Cmd {
+	if m.channelPref() == aseprite.ChannelDev {
+		m.devActive = true
+		m.devCommit = ""
+		return nil
+	}
+	return m.startInstallFlow(app.InstallOptions{Channel: aseprite.ChannelStable})
+}
 
 func (m *Model) buildHomeItems() []menuItem {
 	if !m.hasInstall {
 		return []menuItem{
 			{label: "Install Aseprite", run: func(m *Model) tea.Cmd {
-				return m.startInstallFlow(app.InstallOptions{Channel: channelStable()})
+				return m.beginInstall()
 			}},
 			{label: "Advanced", run: func(m *Model) tea.Cmd { return m.enterAdvanced() }},
 			{label: "Settings", run: func(m *Model) tea.Cmd { return m.enterSettings() }},
@@ -831,10 +864,9 @@ func (m *Model) enterSettings() tea.Cmd {
 	return m.loadConfigCmd()
 }
 
-// buildSettingsItems materializes the toggle list from the loaded
+// buildSettingsItems materializes the settings list from the loaded
 // config. Labels are rendered from m.cfg at view time, so entries stay
-// in sync after each flip. The channel is not a toggle: stable is the
-// only channel until the development backend ships — no dead items.
+// in sync after each flip.
 func (m *Model) buildSettingsItems() []menuItem {
 	return []menuItem{
 		{label: "Keep build workspace", run: func(m *Model) tea.Cmd {
@@ -843,6 +875,14 @@ func (m *Model) buildSettingsItems() []menuItem {
 		}},
 		{label: "Verbose operation logs", run: func(m *Model) tea.Cmd {
 			m.cfg.Verbose = !m.cfg.Verbose
+			return m.saveConfigCmd(m.cfg)
+		}},
+		{label: "Release channel", run: func(m *Model) tea.Cmd {
+			next := aseprite.ChannelStable
+			if m.channelPref() == aseprite.ChannelStable {
+				next = aseprite.ChannelDev
+			}
+			m.cfg.Channel = string(next)
 			return m.saveConfigCmd(m.cfg)
 		}},
 		{label: "Back", run: func(m *Model) tea.Cmd {
@@ -915,7 +955,7 @@ func (m *Model) handlePinKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pinActive = false
 		return m, m.startInstallFlow(app.InstallOptions{
 			Version: m.pinned,
-			Channel: channelStable(),
+			Channel: aseprite.ChannelStable,
 		})
 	case "esc":
 		m.pinActive = false
@@ -929,6 +969,39 @@ func (m *Model) handlePinKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		if msg.Type == tea.KeyRunes {
 			m.pinned += string(msg.Runes)
+		}
+		return m, nil
+	}
+}
+
+// handleDevKey drives the development-commit text entry on the home
+// screen (spec §14: an explicit commit, never a floating HEAD).
+func (m *Model) handleDevKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		if m.devCommit == "" {
+			return m, nil
+		}
+		commit := m.devCommit
+		m.devActive = false
+		m.devCommit = ""
+		return m, m.startInstallFlow(app.InstallOptions{
+			Channel: aseprite.ChannelDev,
+			Commit:  commit,
+		})
+	case "esc":
+		m.devActive = false
+		m.devCommit = ""
+		return m, nil
+	case "backspace":
+		if m.devCommit != "" {
+			r := []rune(m.devCommit)
+			m.devCommit = string(r[:len(r)-1])
+		}
+		return m, nil
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.devCommit += string(msg.Runes)
 		}
 		return m, nil
 	}

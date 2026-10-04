@@ -57,6 +57,11 @@ func applyRunConfig(opts *InstallOptions, cfg state.Config) {
 	if cfg.KeepWorkspace {
 		opts.KeepWorkspace = true
 	}
+	if opts.Channel == "" {
+		// The persisted channel is the default for new installs;
+		// explicit request channels always win.
+		opts.Channel = stateChannelOrDefault(cfg.Channel)
+	}
 }
 
 // verboseSink wraps a ProgressSink so each event is also recorded in
