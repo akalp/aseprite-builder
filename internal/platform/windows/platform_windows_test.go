@@ -60,6 +60,22 @@ func newTestPlatform(t *testing.T, r runner.Runner) Platform {
 	}
 }
 
+// writeFakeVswhere materializes a vswhere.exe under vsroot's Visual
+// Studio Installer path so findVCVars' existence check passes; the
+// runner stub supplies its output. Tests that exercise the capture
+// step must call this (and point ProgramFiles(x86) at vsroot), because
+// findVCVars stats the real path before running it.
+func writeFakeVswhere(t *testing.T, vsroot string) {
+	t.Helper()
+	vswhere := filepath.Join(vsroot, "Microsoft Visual Studio", "Installer", "vswhere.exe")
+	if err := os.MkdirAll(filepath.Dir(vswhere), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vswhere, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // matchChain composes matcher funcs; the newer match wins first.
 func appendMatch(a, b func(runner.Command) (runner.Result, bool)) func(runner.Command) (runner.Result, bool) {
 	return func(c runner.Command) (runner.Result, bool) {
@@ -194,9 +210,18 @@ func TestRequirementsMissingToolchain(t *testing.T) {
 }
 
 func TestBuildEnvironmentCapturesSetOutput(t *testing.T) {
+	vsroot := t.TempDir()
+	t.Setenv("ProgramFiles(x86)", vsroot)
+	writeFakeVswhere(t, vsroot)
+	vcvars := filepath.Join(vsroot, "BuildTools", "VC", "Auxiliary", "Build", "vcvars64.bat")
+
 	p := newTestPlatform(t, &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
-		if c.Name == "cmd" && len(c.Args) == 5 && c.Args[0] == "/d" && c.Args[1] == "/c" &&
-			c.Args[2] == "call" && strings.HasSuffix(strings.ToLower(c.Args[3]), "vcvars64.bat") && c.Args[4] == "set" {
+		if filepath.Base(c.Name) == "vswhere.exe" {
+			return runner.Result{Stdout: vcvars + "\r\n"}, true
+		}
+		if c.Name == "cmd" && len(c.Args) == 6 && c.Args[0] == "/d" && c.Args[1] == "/c" &&
+			c.Args[2] == "call" && strings.HasSuffix(strings.ToLower(c.Args[3]), "vcvars64.bat") &&
+			c.Args[4] == "&&" && c.Args[5] == "set" {
 			return runner.Result{Stdout: "PATH=C:\\VS\\bin;C:\\Windows\r\nLIB=C:\\VS\\LIB;C:\\KIT\\Lib\r\nINCLUDE=C:\\KIT\\Include;C:\\VS\\INCLUDE\r\n\r\nfoo\r\n"}, true
 		}
 		return runner.Result{}, false
@@ -224,15 +249,21 @@ func TestBuildEnvironmentCapturesSetOutput(t *testing.T) {
 }
 
 func TestBuildEnvironmentFailure(t *testing.T) {
-	dummy := t.TempDir()
+	vsroot := t.TempDir()
+	t.Setenv("ProgramFiles(x86)", vsroot)
+	writeFakeVswhere(t, vsroot)
+	vcvars := filepath.Join(vsroot, "BuildTools", "VC", "Auxiliary", "Build", "vcvars64.bat")
+
 	p := newTestPlatform(t, &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if filepath.Base(c.Name) == "vswhere.exe" {
+			return runner.Result{Stdout: vcvars + "\r\n"}, true
+		}
 		return runner.Result{ExitCode: 3, Stderr: "bad batch\r\n"}, true
 	}})
 	_, err := p.BuildEnvironment(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "importing the MSVC environment") {
 		t.Fatalf("err = %v, want the vcvars import failure", err)
 	}
-	_ = dummy
 }
 
 func TestInstallFresh(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -71,12 +72,14 @@ func TestUntarGzFlat(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(dst, "tool-x64", "bin", "cmake")); err != nil || string(got) != "#!/bin/sh\necho cmake" {
 		t.Errorf("cmake content = %q, %v", got, err)
 	}
-	info, err := os.Stat(filepath.Join(dst, "tool-x64", "bin", "cmake"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o100 == 0 {
-		t.Errorf("mode = %v, want executable", info.Mode())
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dst, "tool-x64", "bin", "cmake"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0o100 == 0 {
+			t.Errorf("mode = %v, want executable", info.Mode())
+		}
 	}
 }
 

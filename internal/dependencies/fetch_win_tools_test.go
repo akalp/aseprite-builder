@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,9 @@ func TestWinToolsFetchersRejectForeignAssets(t *testing.T) {
 }
 
 func TestWinToolsMacFetchersStillResolveMacAssets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("macOS distribution layouts are verified on Unix hosts (production never picks this fetcher on Windows)")
+	}
 	layout := testLayout(t)
 	archive := mustTarGz(t, map[string]string{
 		"cmake-4.1.2-macos-universal/CMake.app/Contents/bin/cmake": "MACHO",

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -128,12 +129,51 @@ func TestResolvePrefersSystemTool(t *testing.T) {
 	}
 }
 
+// hostToolName returns the executable base name a tool distribution
+// ships on this host.
+func hostToolName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
+
+// baseToolName strips the Windows executable suffix so assertions can
+// match "cmake" against "cmake.exe".
+func baseToolName(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), ".exe")
+}
+
+// materializeCachedTool writes a cached distribution binary using the
+// host's layout (bin/cmake.exe on Windows; the CMake.app bundle layout
+// elsewhere) and returns its path.
+func materializeCachedTool(t *testing.T, layout paths.Layout, name, v string) string {
+	t.Helper()
+	var rel string
+	switch {
+	case name == "cmake" && runtime.GOOS == "windows":
+		rel = filepath.Join("bin", "cmake.exe")
+	case name == "cmake":
+		rel = filepath.Join("CMake.app", "Contents", "bin", "cmake")
+	default:
+		rel = hostToolName(name)
+	}
+	bin := filepath.Join(layout.Tools, name, "official", v, rel)
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("stub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
 func TestResolveRejectsOldSystemToolAndDownloads(t *testing.T) {
 	r := fakeVersionRunner(t, map[string]string{"cmake": "3.19.2"})
 	// The downloaded distribution's binary probes as 4.1.2 (fresh and
 	// functional), while the system cmake is too old.
 	r.Match = func(c runner.Command) (runner.Result, bool) {
-		if filepath.Base(c.Name) == "cmake" &&
+		if baseToolName(c.Name) == "cmake" &&
 			len(c.Args) == 1 && c.Args[0] == "--version" &&
 			strings.Contains(c.Name, string(os.PathSeparator)+"4.1.2") {
 			return runner.Result{Stdout: "cmake version 4.1.2\n"}, true
@@ -141,13 +181,7 @@ func TestResolveRejectsOldSystemToolAndDownloads(t *testing.T) {
 		return runner.Result{Stdout: "cmake version 3.19.2\n"}, true
 	}
 	layout := testLayout(t)
-	cachedBin := filepath.Join(layout.Tools, "cmake", "official", "4.1.2", "CMake.app", "Contents", "bin", "cmake")
-	if err := os.MkdirAll(filepath.Dir(cachedBin), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cachedBin, []byte("stub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	cachedBin := materializeCachedTool(t, layout, "cmake", "4.1.2")
 
 	res := &Resolver{
 		Runner: r,
@@ -176,21 +210,14 @@ func TestResolveRejectsOldSystemToolAndDownloads(t *testing.T) {
 // under the layout and returns the binary path.
 func materializeCachedCMake(t *testing.T, layout paths.Layout) string {
 	t.Helper()
-	bin := filepath.Join(layout.Tools, "cmake", "official", "4.1.2", "CMake.app", "Contents", "bin", "cmake")
-	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(bin, []byte("stub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return bin
+	return materializeCachedTool(t, layout, "cmake", "4.1.2")
 }
 
 func TestResolvePreferCachedUsesCacheOverSystem(t *testing.T) {
 	layout := testLayout(t)
 	cachedBin := materializeCachedCMake(t, layout)
 	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
-		if len(c.Args) == 1 && c.Args[0] == "--version" && strings.HasSuffix(c.Name, "cmake") {
+		if len(c.Args) == 1 && c.Args[0] == "--version" && baseToolName(c.Name) == "cmake" {
 			if strings.Contains(c.Name, "4.1.2") {
 				return runner.Result{Stdout: "cmake version 4.1.2\n"}, true
 			}
@@ -232,7 +259,7 @@ func TestCheckPreferCachedReportsCache(t *testing.T) {
 	layout := testLayout(t)
 	cachedBin := materializeCachedCMake(t, layout)
 	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
-		if len(c.Args) == 1 && c.Args[0] == "--version" && strings.HasSuffix(c.Name, "cmake") {
+		if len(c.Args) == 1 && c.Args[0] == "--version" && baseToolName(c.Name) == "cmake" {
 			if strings.Contains(c.Name, "4.1.2") {
 				return runner.Result{Stdout: "cmake version 4.1.2\n"}, true
 			}
@@ -269,18 +296,12 @@ func TestResolveSkipsBrokenCacheEntries(t *testing.T) {
 	// System cmake is present but TOO OLD (so it must be skipped); the
 	// cached distribution is present but its probe fails (broken).
 	layout := testLayout(t)
-	cachedBin := filepath.Join(layout.Tools, "cmake", "official", "4.1.2", "CMake.app", "Contents", "bin", "cmake")
-	if err := os.MkdirAll(filepath.Dir(cachedBin), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cachedBin, []byte("stub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	cachedBin := materializeCachedTool(t, layout, "cmake", "4.1.2")
 
 	r := &runner.FakeRunner{Errs: map[string]error{
 		cachedBin + " --version": errors.New("exec format error"), // broken cached dist
 	}, Match: func(c runner.Command) (runner.Result, bool) {
-		if filepath.Base(c.Name) == "cmake" && len(c.Args) == 1 && c.Args[0] == "--version" {
+		if baseToolName(c.Name) == "cmake" && len(c.Args) == 1 && c.Args[0] == "--version" {
 			return runner.Result{Stdout: "cmake version 3.19.2\n"}, true
 		}
 		return runner.Result{}, false
@@ -349,13 +370,7 @@ func TestCachedToolsNewestFirstAndSanitized(t *testing.T) {
 	layout := testLayout(t)
 	// Create two cached versions plus an unparsable directory to skip.
 	for _, v := range []string{"4.1.2", "3.31.6"} {
-		dir := filepath.Join(layout.Tools, "cmake", "official", v, "CMake.app", "Contents", "bin")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "cmake"), []byte("stub"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		materializeCachedTool(t, layout, "cmake", v)
 	}
 	if err := os.MkdirAll(filepath.Join(layout.Tools, "cmake", "official", "garbage-dir"), 0o755); err != nil {
 		t.Fatal(err)

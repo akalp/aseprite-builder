@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -92,6 +93,9 @@ func TestUnzipRejectsBackslashEntries(t *testing.T) {
 }
 
 func TestUnzipExecBitPreserved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not model POSIX executable bits")
+	}
 	src := filepath.Join(t.TempDir(), "exec.zip")
 	// Build with executable mode manually.
 	f, err := os.Create(src)

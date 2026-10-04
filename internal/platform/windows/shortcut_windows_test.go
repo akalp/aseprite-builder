@@ -91,11 +91,18 @@ func TestWriteShellLinkByteLayout(t *testing.T) {
 	if got := string(ansiBase); !strings.HasPrefix(got, `C:\Users\?ser`) {
 		t.Errorf("ANSI LocalBasePath = %q (lossy; non-ASCII must degrade, not break)", got)
 	}
-	// Unicode base path must be exact.
+	// Unicode base path must be exact. Scan UTF-16 code units for the
+	// terminator: a raw byte scan for 00 00 would stop at the high byte
+	// of the last ASCII character.
 	uBase := data[off+localBaseOffU:]
-	if i := bytes.Index(uBase, []byte{0, 0}); i >= 0 {
-		uBase = uBase[:i]
+	end := len(uBase)
+	for i := 0; i+1 < len(uBase); i += 2 {
+		if uBase[i] == 0 && uBase[i+1] == 0 {
+			end = i
+			break
+		}
 	}
+	uBase = uBase[:end]
 	if got := utf16From(uBase); got != exe {
 		t.Errorf("LocalBasePathUnicode = %q, want %q", got, exe)
 	}

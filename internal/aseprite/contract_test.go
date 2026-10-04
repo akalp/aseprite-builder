@@ -203,7 +203,7 @@ func TestDiscoverSkiaRequirement(t *testing.T) {
 	if len(calls) != 1 || calls[0].Name != "bash" || calls[0].Dir != src {
 		t.Fatalf("calls = %+v", calls)
 	}
-	if got := strings.Join(calls[0].Args, " "); got != src+"/laf/misc/skia-url.sh Release macos arm64" {
+	if got := strings.Join(calls[0].Args, " "); got != filepath.Join(src, "laf", "misc", "skia-url.sh")+" Release macos arm64" {
 		t.Errorf("args = %q", got)
 	}
 }

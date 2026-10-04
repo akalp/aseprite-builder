@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -57,8 +58,10 @@ func extractEntry(f *zip.File, dstAbs string) error {
 
 	// Absolute entries (e.g. "/etc/passwd") become relative and then fail
 	// the withinDir check only if they'd escape; treat absolute names as
-	// an error explicitly to avoid platform surprises.
-	if filepath.IsAbs(name) || strings.HasPrefix(name, "\\") {
+	// an error explicitly to avoid platform surprises. A leading "/" is
+	// rejected on every platform: archive entry names are POSIX paths,
+	// even when extracted on Windows.
+	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
 		return fmt.Errorf("archive entry %q uses an absolute path", name)
 	}
 
@@ -141,12 +144,14 @@ func StripTopLevelDir(src string) (string, bool, error) {
 	top := ""
 	hasDeeper := false
 	for _, f := range r.File {
-		name := filepath.Clean(f.Name)
-		if name == "." || name == "" {
-			continue
-		}
 		if strings.Contains(f.Name, "\\") {
 			return "", false, errors.New("archive entry uses a backslash")
+		}
+		// Archive entry names are POSIX paths: use slash semantics, not
+		// the host's filepath (which rewrites "/" to "\" on Windows).
+		name := path.Clean(f.Name)
+		if name == "." || name == "" {
+			continue
 		}
 		first, _, deeper := strings.Cut(name, "/")
 		if first == "" {

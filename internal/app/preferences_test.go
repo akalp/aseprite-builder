@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -126,8 +127,13 @@ func TestDoctorHonorsCachedToolPreference(t *testing.T) {
 	svc, _, fk, _ := newTestService(t)
 
 	// A cached cmake distribution plus a compatible system tool: the
-	// configured preference decides which one doctor reports.
-	cachedBin := filepath.Join(svc.opts.Layout.Tools, "cmake", "official", "4.1.2", "CMake.app", "Contents", "bin", "cmake")
+	// configured preference decides which one doctor reports. The cache
+	// layout follows the host (bin/cmake.exe on Windows).
+	cachedRel := filepath.Join("CMake.app", "Contents", "bin", "cmake")
+	if runtime.GOOS == "windows" {
+		cachedRel = filepath.Join("bin", "cmake.exe")
+	}
+	cachedBin := filepath.Join(svc.opts.Layout.Tools, "cmake", "official", "4.1.2", cachedRel)
 	if err := os.MkdirAll(filepath.Dir(cachedBin), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -135,13 +141,14 @@ func TestDoctorHonorsCachedToolPreference(t *testing.T) {
 		t.Fatal(err)
 	}
 	fk.Match = func(c runner.Command) (runner.Result, bool) {
-		if len(c.Args) == 1 && c.Args[0] == "--version" && strings.HasSuffix(c.Name, "cmake") {
+		base := strings.TrimSuffix(filepath.Base(c.Name), ".exe")
+		if len(c.Args) == 1 && c.Args[0] == "--version" && base == "cmake" {
 			if strings.Contains(c.Name, "4.1.2") {
 				return runner.Result{Stdout: "cmake version 4.1.2\n"}, true
 			}
 			return runner.Result{Stdout: "cmake version 3.31.6\n"}, true
 		}
-		if len(c.Args) == 1 && c.Args[0] == "--version" && strings.HasSuffix(c.Name, "ninja") {
+		if len(c.Args) == 1 && c.Args[0] == "--version" && base == "ninja" {
 			return runner.Result{Stdout: "1.13.1\n"}, true
 		}
 		return runner.Result{}, false

@@ -3,9 +3,11 @@ package archive
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -53,7 +55,9 @@ func extractTarEntry(hdr *tar.Header, r io.Reader, dstAbs string) error {
 	if name == "" {
 		return nil
 	}
-	if filepath.IsAbs(name) || strings.Contains(name, "\\") {
+	// Tar entry names are POSIX paths; reject absolute and
+	// backslash-style forms on every platform.
+	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
 		return fmt.Errorf("archive entry %q uses an unsupported path form", name)
 	}
 	cleaned := filepath.Clean(name)
@@ -71,7 +75,7 @@ func extractTarEntry(hdr *tar.Header, r io.Reader, dstAbs string) error {
 		// Symlinks inside toolchain tarballs are internal (e.g. lib
 		// versioning). Reject links that would point outside the tree.
 		target := filepath.Clean(hdr.Linkname)
-		if filepath.IsAbs(target) {
+		if filepath.IsAbs(target) || strings.HasPrefix(hdr.Linkname, "/") {
 			return fmt.Errorf("archive entry %q has an absolute symlink target", name)
 		}
 		linkDir := filepath.Dir(joined)
@@ -137,7 +141,12 @@ func TarGzTopLevelDir(src string) (string, bool, error) {
 		if err != nil {
 			return "", false, fmt.Errorf("read tar entry: %w", err)
 		}
-		name := filepath.Clean(hdr.Name)
+		if strings.Contains(hdr.Name, "\\") {
+			return "", false, errors.New("archive entry uses a backslash")
+		}
+		// Tar entry names are POSIX paths: use slash semantics, not the
+		// host's filepath (which rewrites "/" to "\" on Windows).
+		name := path.Clean(hdr.Name)
 		if name == "." || name == "" {
 			continue
 		}

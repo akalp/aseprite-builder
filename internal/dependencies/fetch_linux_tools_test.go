@@ -4,10 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestLinuxToolsCMakeFetchInstallsBinLayout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux distribution layouts are verified on Unix hosts (production never picks this fetcher on Windows)")
+	}
 	layout := testLayout(t)
 	archive := mustTarGz(t, map[string]string{
 		"cmake-4.4.4-linux-x86_64/bin/cmake":       "ELF",
@@ -47,6 +51,9 @@ func TestLinuxToolsCMakeFetchInstallsBinLayout(t *testing.T) {
 }
 
 func TestLinuxToolsNinjaFetchInstallsRootBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux distribution layouts are verified on Unix hosts (production never picks this fetcher on Windows)")
+	}
 	layout := testLayout(t)
 	archive := mustZipExec(t, map[string]string{"ninja": "ELF", "README": "n"})
 	client := winReleasesServer(t, "v1.13.2", "ninja-linux.zip", archive)
@@ -89,6 +96,9 @@ func TestLinuxToolsFetchersRejectForeignAssets(t *testing.T) {
 }
 
 func TestLocateToolBinaryLinuxCMakeShape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bare (extensionless) binaries are not executable on Windows")
+	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
