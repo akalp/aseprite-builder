@@ -142,6 +142,7 @@ func ProbeCachedTool(ctx context.Context, r runner.Runner, name, path string) (v
 var toolBinaryLocators = map[string][]string{
 	"cmake": {
 		filepath.Join("CMake.app", "Contents", "bin", "cmake"),     // macOS dist
+		filepath.Join("bin", "cmake"),                              // linux dist
 		filepath.Join("bin", "cmake.exe"),                          // windows dist
 		filepath.Join("CMake.app", "Contents", "bin", "cmake.exe"), // defensive
 		"cmake.exe", // defensive

@@ -13,7 +13,7 @@ directories.
 ## Current status
 
 The project is at the first vertical slice plus its interactive UI,
-now spanning two platforms:
+now spanning three platforms:
 
 - **macOS Apple Silicon + Intel** (arm64/amd64), CLI **and TUI**.
 - **Windows 11 x64** (amd64): Microsoft toolchain detected
@@ -22,6 +22,15 @@ now spanning two platforms:
   `%LOCALAPPDATA%\Programs\Aseprite`, Start-Menu shortcut, same
   transactional updating/uninstall semantics. CLI end-to-end; the TUI
   inherits the same services.
+- **Linux Debian/Ubuntu x86_64** (amd64): distribution detected from
+  `/etc/os-release`, missing build packages reported with the exact
+  `sudo apt-get install …` command (run visibly only after your
+  explicit consent — never silently), Aseprite compiled through
+  upstream's `build.sh`, user-local install to `~/.local/opt/aseprite`,
+  `~/.local/bin/aseprite` CLI symlink plus a desktop entry and hicolor
+  icons so Aseprite shows up in the app menu. Same transactional
+  updating/uninstall semantics. Additional distributions
+  (Fedora/Arch/openSUSE/Void) are the next milestone.
 - **Running `aseprite-builder` with no arguments opens the interactive
   TUI** (install / launch / update / repair / rebuild / diagnostics /
   settings / uninstall — same services as the CLI, structured progress,
@@ -37,10 +46,7 @@ now spanning two platforms:
   touches an existing working installation; the previous version is
   retained for one generation.
 
-Linux support is the next milestone (see `docs/PROJECT_SPEC.md` §42 and
-`docs/plans/`).
-
-## Quick start (macOS)
+## Quick start
 
 ```bash
 # Build it
@@ -82,6 +88,15 @@ verify the resulting executable
         ↓
 install a native ~/Applications/Aseprite.app
 ```
+
+On Linux the same pipeline runs with distribution-native package
+handling: `/etc/os-release` identifies the distribution (Debian/Ubuntu
+today), missing build packages are shown as a single
+`sudo apt-get install …` command, and the result is installed to
+`~/.local/opt/aseprite` with a `~/.local/bin/aseprite` symlink, a
+desktop entry and hicolor icons. If you consent on a live terminal the
+CLI runs that install command visibly for you; otherwise it stops and
+prints the exact command to run yourself.
 
 ## Documentation
 

@@ -22,6 +22,16 @@ func (c *CLI) cmdUpdate(ctx context.Context, args []string) int {
 		c.printServiceError(err)
 		return 1
 	}
+	// System packages (Linux) are preflighted only when there is an
+	// installation to update; otherwise Update reports "install first".
+	if _, installed, err := svc.CurrentInstall(); err == nil && installed {
+		if ok, err := c.ensureSystemPackages(ctx, svc); !ok {
+			if err != nil {
+				c.printServiceError(err)
+			}
+			return int(exitCode(1))
+		}
+	}
 	if !*v.Yes && !c.confirm("Check for updates and install the latest stable Aseprite?") {
 		fmt.Fprintln(c.Stderr, "update cancelled; nothing was changed")
 		return int(exitCode(1))
@@ -108,6 +118,16 @@ func (c *CLI) cmdRebuild(ctx context.Context, args []string) int {
 	if err != nil {
 		c.printServiceError(err)
 		return 1
+	}
+	// System packages (Linux) are preflighted only when there is an
+	// installation to rebuild; otherwise Rebuild reports "install first".
+	if _, installed, err := svc.CurrentInstall(); err == nil && installed {
+		if ok, err := c.ensureSystemPackages(ctx, svc); !ok {
+			if err != nil {
+				c.printServiceError(err)
+			}
+			return int(exitCode(1))
+		}
 	}
 	hud := c.newHUD(false)
 	result, err := svc.Rebuild(ctx, app.RebuildOptions{Clean: *v.Clean}, hud.Sink())

@@ -22,9 +22,11 @@ import (
 // 2 = platform-level contract semantics: the same upstream tree shape
 //
 //	as level 1, but the recognized contract is now distinguished per
-//	platform (macOS bundle flow vs. Windows direct-CMake flow) and
-//	fingerprints carry the OS so install state can tell generations
-//	and platforms apart.
+//	platform (macOS bundle flow, Windows direct-CMake flow, Linux
+//	build.sh flow) and fingerprints carry the OS so install state can
+//	tell generations and platforms apart. Adding a platform to the
+//	same semantics does not change this level; the fingerprint's os=
+//	token distinguishes them.
 const contractLevel = 2
 
 // Contract summarizes the upstream build contract discovered by
@@ -49,9 +51,9 @@ type Contract struct {
 	// (build.sh on macOS/Linux; build.cmd/build.ps1 markers are
 	// validated separately for the Windows flow).
 	BuildScript string
-	// OS names the platform this contract shape supports ("darwin" or
-	// "windows"); recorded so state fingerprints cannot be confused
-	// across platforms.
+	// OS names the platform this contract shape supports ("darwin",
+	// "windows" or "linux"); recorded so state fingerprints cannot be
+	// confused across platforms.
 	OS string
 	// Level is the builder-side contract level recognized here.
 	Level int
@@ -78,15 +80,16 @@ var (
 	cmakeMinVersionRe = regexp.MustCompile(`(?m)^\s*cmake_minimum_required\s*\(\s*VERSION\s+([0-9.]+)`)
 	projectNameRe     = regexp.MustCompile(`(?m)^\s*project\s*\(\s*aseprite\b`)
 	bundleOutputRe    = regexp.MustCompile(`bin/Aseprite\.app`)
-	// windowsExeOutputRe matches the src/CMakeLists.txt exe output
+	// plainExeOutputRe matches the src/CMakeLists.txt exe output
 	// contract: add_executable(aseprite ...) guarded with INSTALL_OPT
 	// RUNTIME (the non-bundle branch). Visible only in the non-bundle
-	// layout, i.e. exactly the Windows shape this builder drives.
-	windowsExeOutputRe = regexp.MustCompile(`(?m)^\s*add_executable\s*\(\s*aseprite\b`)
-	// windowsDataOutputRe matches the non-bundle data output dir
+	// layout — exactly the Windows and Linux shape this builder drives.
+	plainExeOutputRe = regexp.MustCompile(`(?m)^\s*add_executable\s*\(\s*aseprite\b`)
+	// plainDataOutputRe matches the non-bundle data output dir
 	// contract (`bin/data`); see ORIGINAL_DATA_OUTPUT_DIR / the
-	// copy_data custom target in src/CMakeLists.txt.
-	windowsDataOutputRe = regexp.MustCompile(`bin/data`)
+	// copy_data custom target in src/CMakeLists.txt. On macOS the data
+	// dir lives inside the bundle instead (bin/Aseprite.app/...).
+	plainDataOutputRe = regexp.MustCompile(`bin/data`)
 )
 
 // requiredFiles are structural markers from the upstream tree. The
@@ -128,6 +131,10 @@ const (
 	ExeOutputAppBundle ExeOutputConfig = iota + 1
 	// ExeOutputWindows is the plain Windows exe + bin/data contract.
 	ExeOutputWindows
+	// ExeOutputLinux is the plain Linux executable + bin/data
+	// contract (same non-bundle shape as Windows; built through
+	// upstream's build.sh rather than the direct-CMake Windows flow).
+	ExeOutputLinux
 )
 
 // Inspect validates the source tree and derives the build contract.
@@ -154,6 +161,10 @@ func (Inspector) Inspect(sourceDir string, output ExeOutputConfig) (Contract, er
 		extra = darwinRequiredFiles
 	case ExeOutputWindows:
 		extra = windowsRequiredFiles
+	case ExeOutputLinux:
+		// No Linux-only structural markers: build.sh is already in the
+		// base set, and the output rules are shared with the plain
+		// exe + bin/data contract checked below.
 	}
 	for _, f := range extra {
 		if !wantsSourceFile(sourceDir, f) {
@@ -206,16 +217,20 @@ func (Inspector) Inspect(sourceDir string, output ExeOutputConfig) (Contract, er
 			}}
 		}
 		contract.BundleOutput = filepath.Join("build", "bin", "Aseprite.app")
-	case ExeOutputWindows:
+	case ExeOutputWindows, ExeOutputLinux:
 		srcCmake, err := os.ReadFile(filepath.Join(sourceDir, "src", "CMakeLists.txt")) //nolint:gosec // path from trusted app logic
 		if err != nil {
 			return Contract{}, UnknownContractError{Reasons: []string{
 				"cannot read src/CMakeLists.txt: " + err.Error(),
 			}}
 		}
-		if !windowsExeOutputRe.Match(srcCmake) || !windowsDataOutputRe.Match(srcCmake) {
+		if !plainExeOutputRe.Match(srcCmake) || !plainDataOutputRe.Match(srcCmake) {
+			what := "Windows exe + bin/data output contract"
+			if output == ExeOutputLinux {
+				what = "Linux executable + bin/data output contract"
+			}
 			return Contract{}, UnknownContractError{Reasons: []string{
-				"src/CMakeLists.txt no longer describes the Windows exe + bin/data output contract",
+				"src/CMakeLists.txt no longer describes the " + what,
 			}}
 		}
 	}
@@ -240,6 +255,8 @@ func (c ExeOutputConfig) OS() string {
 		return "darwin"
 	case ExeOutputWindows:
 		return "windows"
+	case ExeOutputLinux:
+		return "linux"
 	default:
 		return ""
 	}

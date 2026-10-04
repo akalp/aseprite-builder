@@ -290,7 +290,7 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 	result.Workspace = s.opts.Layout.SourceTreeDir(result.Version)
 
 	// 4/5. Source acquisition + contract inspection ---------------------
-	provisioned, err := s.provisionSource(ctx, rel, sink, log)
+	provisioned, err := s.provisionSource(ctx, rel, info, sink, log)
 	if err != nil {
 		return result, err
 	}
@@ -370,12 +370,13 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 		installer.SetAllowReplaceUnowned(opts.ForceOverwriteUnowned)
 	}
 	outcome, err := s.opts.Platform.Install(ctx, platform.BuildOutput{
-		Version:    result.Version,
-		AppPath:    buildOut.AppPath,
-		Executable: buildOut.Executable,
-		BinDir:     buildOut.BinDir,
-		DataDir:    buildOut.DataDir,
-		IconsDir:   buildOut.IconsDir,
+		Version:     result.Version,
+		AppPath:     buildOut.AppPath,
+		Executable:  buildOut.Executable,
+		BinDir:      buildOut.BinDir,
+		DataDir:     buildOut.DataDir,
+		IconsDir:    buildOut.IconsDir,
+		DesktopFile: buildOut.DesktopFile,
 	})
 	if err != nil {
 		return result, fmt.Errorf("install failed: %w", err)
@@ -492,7 +493,7 @@ func (f downloaderFetcher) Fetch(ctx context.Context, src, dst, sha string, prog
 // upstream contract may have changed since the last build, and the
 // build orchestration needs contract facts (Skia naming, CMake
 // minimum) even when the tree is cached.
-func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, sink ProgressSink, log *logging.Logger) (provisionResult, error) {
+func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, info platform.SystemInfo, sink ProgressSink, log *logging.Logger) (provisionResult, error) {
 	sink.emit(ProgressEvent{Stage: StageFetchSource, Message: "Downloading official source archive"})
 
 	sourceDir := s.opts.Layout.SourceTreeDir(rel.Version.String())
@@ -522,7 +523,7 @@ func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, sin
 
 	sink.emit(ProgressEvent{Stage: StageInspectContract, Message: "Inspecting upstream build contract"})
 	inspector := aseprite.NewInspector()
-	contract, err := inspector.Inspect(sourceDir, s.wantsOutputConfig())
+	contract, err := inspector.Inspect(sourceDir, outputConfigFor(info.OS))
 	if err != nil {
 		return provisionResult{}, UnknownContractError{Reason: err}
 	}
@@ -584,16 +585,19 @@ func (s *Service) captureBuildEnvironment(ctx context.Context, log *logging.Logg
 	return env, nil
 }
 
-// wantsOutputConfig selects which upstream output contract the
-// running platform consumes: the macOS .app bundle or the Windows
-// exe + bin/data layout. Bundling is part of the discovered contract
-// only on systems that consume it.
-func (s *Service) wantsOutputConfig() aseprite.ExeOutputConfig {
-	path := s.opts.Platform.DefaultInstallPath()
-	if path != "" && strings.HasSuffix(path, ".app") {
+// outputConfigFor maps the detected OS to the upstream output contract
+// the running platform consumes: the macOS .app bundle, or the plain
+// executable + bin/data layout Windows and Linux install. Bundling is
+// part of the discovered contract only on systems that consume it.
+func outputConfigFor(osName string) aseprite.ExeOutputConfig {
+	switch osName {
+	case "darwin":
 		return aseprite.ExeOutputAppBundle
+	case "linux":
+		return aseprite.ExeOutputLinux
+	default:
+		return aseprite.ExeOutputWindows
 	}
-	return aseprite.ExeOutputWindows
 }
 
 // extractSourceArchive extracts the source zip into sourceDir,
@@ -653,9 +657,13 @@ func (s *Service) resolveBuildInputs(ctx context.Context, provisioned provisionR
 		Client: s.upstreamClient(),
 		Log:    log.Line,
 	}
-	if info.OS == "windows" {
+	switch info.OS {
+	case "windows":
 		cmakeFetcher = dependencies.NewWindowsCMakeFetcher(s.opts.Layout, s.upstreamClient())
 		ninjaFetcher = dependencies.NewWindowsNinjaFetcher(s.opts.Layout, s.upstreamClient())
+	case "linux":
+		cmakeFetcher = dependencies.NewLinuxCMakeFetcher(s.opts.Layout, s.upstreamClient())
+		ninjaFetcher = dependencies.NewLinuxNinjaFetcher(s.opts.Layout, s.upstreamClient())
 	}
 	resolver := &dependencies.Resolver{
 		Runner: s.opts.Runner,

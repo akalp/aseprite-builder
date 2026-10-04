@@ -10,7 +10,7 @@ Read [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for how the implemented
 code maps to the spec, and [`../../AGENTS.md`](../../AGENTS.md) for the
 invariants every phase must preserve.
 
-## Status snapshot (audited 2026-10-04, Phase 1 complete)
+## Status snapshot (audited 2026-10-04, Phases 1–3 implemented)
 
 `make check` passes (gofmt + go vet + go test, no network, no Aseprite
 compile in tests).
@@ -21,7 +21,7 @@ compile in tests).
 | 2 — macOS arm64 vertical slice | ✅ Complete | `internal/platform/darwin` (detect / requirements / transactional install + retention rollback / launch / uninstall), contract inspection (`internal/aseprite/contract.go`), build orchestration via upstream `build.sh --auto --norun`, Skia discovery from the source tree, update / rebuild / repair / uninstall / doctor `--json`, CLI HUD, Libre-license notice |
 | 3 — TUI | ✅ Complete | `internal/tui` (Bubble Tea + Lip Gloss): welcome (§7 notice) → home (§12 mock) → systemcheck → installoptions → installing (structured progress, Ctrl+C cancels) → result; diagnostics / settings (`state.Config` now read+written) / advanced (pinned install, rebuilds, uninstall with purge scopes); §39 error screens with shared `app.FriendlyMessage`, distinct §17 unknown-contract screen; no-args TTY invocation opens it |
 | 4 — Windows x64 | ✅ Implemented | `internal/platform/windows` (vswhere/vcvars64 detection + `BuildEnvironment`, transactional install to `%LOCALAPPDATA%\Programs\Aseprite`, Start-Menu `.lnk`, launch/uninstall), `SupportedTargets()` gains `windows:{amd64}` + `selector_windows.go`, direct-CMake orchestration (`internal/aseprite/windowsbuild.go`, contractLevel 2 with `os=` fingerprint token), bash-free Skia URL parsing (`DiscoverSkiaRequirementBashFree`), Windows CMake/Ninja fetchers (`cmake-…-windows-x86_64.zip`, `ninja-win.zip`), `.exe` binary locating, `skia.lib` layout validation. `make check` green on darwin; `GOOS=windows go build/vet ./...` clean. Real-host E2E pending the Phase 5 Windows CI runner. |
-| 5 — Linux Debian/Ubuntu | ❌ Not started | no packages layer |
+| 5 — Linux Debian/Ubuntu | ✅ Implemented | `internal/packages` + `internal/packages/apt` (os-release detection, dpkg-query presence probes, documented Debian/Ubuntu package-name table, visible interactive `sudo apt-get install` only after explicit CLI consent), `internal/platform/linux` (distribution detection, requirement composition with apt, transactional install to `~/.local/opt/aseprite`, CLI symlink + upstream-templated desktop entry + hicolor icons, detached launch, owned-only uninstall), `ExeOutputLinux` contract (exe + `bin/data`, `os=linux` fingerprint, contractLevel 2), Linux CMake/Ninja fetchers, `linux:{"amd64"}` + selector. `make check` green on darwin; `GOOS=linux go vet` clean; full suite green in a Linux container. Real-VM E2E pending. |
 | 6 — Additional Linux distros | ❌ Not started | — |
 | 7 — Hardening | ◐ Partial | rollback/retention ✅, contract validation ✅, download verification ✅ (where upstream publishes digests), cancellation ✅ (signals wired) — CI, release packaging + §38 release-safety checks, dev channel, settings/advanced surface, security review ❌ |
 
@@ -42,7 +42,7 @@ until its backend exists), release artifacts (§3/§38), CI matrix
 |---|---|---|---|---|
 | 1 | TUI over the existing services | §10, §12, §34, §39 | [`phase-1-tui.md`](phase-1-tui.md) | ✅ Complete |
 | 2 | Windows x64 platform | §11, §21, §37 | [`phase-2-windows.md`](phase-2-windows.md) | ✅ Implemented |
-| 3 | Linux — Debian/Ubuntu vertical slice | §11, §16, §22 | [`phase-3-linux-debian-ubuntu.md`](phase-3-linux-debian-ubuntu.md) | Planned |
+| 3 | Linux — Debian/Ubuntu vertical slice | §11, §16, §22 | [`phase-3-linux-debian-ubuntu.md`](phase-3-linux-debian-ubuntu.md) | ✅ Implemented |
 | 4 | Linux — additional distributions | §11, §16, §22 | [`phase-4-linux-distros.md`](phase-4-linux-distros.md) | Planned |
 | 5 | Release engineering & hardening | §3, §14, §24, §25, §30, §33, §37, §38, §41 | [`phase-5-hardening-release.md`](phase-5-hardening-release.md) | Planned |
 
@@ -57,8 +57,9 @@ until its backend exists), release artifacts (§3/§38), CI matrix
    only path to tools the user lacks.
 3. **No version matrices.** Anything the upstream tree can tell us
    (CMake minimum, Skia tag, output paths) is discovered from it.
-   Platform package *names* for system-managed compiler deps are the
-   one exception and live in the platform layer, documented as such.
+   Distribution package *names* for system-managed compiler deps are the
+   one exception and live in `internal/packages/*`, documented as such
+   (names only — never versions).
 4. **Platform isolation holds.** New OS behavior goes through
    `platform.Platform` (+ new `internal/packages` for Linux); no
    `runtime.GOOS` outside `platformselector`, `paths`, `platform`.

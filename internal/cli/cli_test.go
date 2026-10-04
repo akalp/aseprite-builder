@@ -72,7 +72,7 @@ func (r cliFakeReleases) List(context.Context, aseprite.Channel) ([]aseprite.Rel
 	return r.releases, nil
 }
 
-func newCLITestService(t *testing.T, plat *cliFakePlatform) *app.Service {
+func newCLITestService(t *testing.T, plat platform.Platform) *app.Service {
 	t.Helper()
 	layout, err := paths.New(t.TempDir())
 	if err != nil {

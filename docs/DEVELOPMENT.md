@@ -3,9 +3,10 @@
 ## Requirements
 
 - Go 1.24+
-- macOS is the primary development host (the first vertical slice is
-  macOS arm64/amd64; Windows x64 is implemented and cross-verified
-  from macOS via the Go cross-build).
+- macOS is the primary development host. The macOS slice is
+  implemented; Windows x64 and Linux (Debian/Ubuntu amd64) are
+  implemented and cross-checked from macOS (`GOOS=… go vet`, plus a
+  Linux container for executing the linux-tagged tests).
 
 ## Common commands
 
@@ -15,10 +16,14 @@ go test ./...               # full unit test suite
 go vet ./...                # static checks
 gofmt -l .                  # formatting check (should print nothing)
 
-# Windows (cross-check from macOS/ci): builds, vets and compiles the
-# windows-tagged tests without executing them.
-GOOS=windows GOARCH=amd64 go build ./...
-GOOS=windows GOARCH=amd64 go vet ./...
+# Cross-check the other platforms (builds, vets and compiles the
+# windows/linux-tagged tests without executing them).
+GOOS=windows GOARCH=amd64 go build ./... && GOOS=windows GOARCH=amd64 go vet ./...
+GOOS=linux GOARCH=amd64 go build ./... && GOOS=linux GOARCH=amd64 go vet ./...
+GOOS=linux GOARCH=amd64 go test -c -o /dev/null ./internal/platform/linux  # compile linux tests
+
+# Execute the linux-tagged tests on a macOS host (Docker):
+docker run --rm -v "$PWD":/src -w /src golang:1.24 go test ./...
 
 go run ./cmd/aseprite-builder help
 go run ./cmd/aseprite-builder doctor --json
@@ -57,6 +62,11 @@ HOME="$TMPHOME" go run ./cmd/aseprite-builder doctor
   GitHub API; network is never required.
 - Filesystem behavior (archives, state, install staging) uses real
   temp directories — no in-memory fs shims that diverge from reality.
+- The packages layer (`internal/packages`, `internal/packages/apt`) is
+  host-neutral and runs everywhere; the linux-tagged platform tests
+  (install staging/retention/rollback, symlink/desktop/icon lifecycle,
+  consent gating) execute via the Docker command above or on a Linux
+  host.
 
 ## Updating upstream knowledge
 

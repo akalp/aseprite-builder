@@ -33,10 +33,11 @@ func fixtureSource(t *testing.T, opts ...func(files map[string]string)) string {
 			"    skia_file=Skia-Linux-$skia_build-$cpu.zip\n" +
 			"fi\n" +
 			"echo https://github.com/aseprite/skia/releases/download/$skia_tag/$skia_file\n",
-		"src/main/osx/Info.plist": "<plist>",
-		"src/CMakeLists.txt":      "# output contract\n# ${CMAKE_BINARY_DIR}/bin/Aseprite.app/Contents/Resources/data\n",
-		"build.cmd":               "@echo off\r\nrem upstream windows entry point\r\n",
-		"build.ps1":               "# upstream windows wrapper\r\n",
+		"src/main/osx/Info.plist":            "<plist>",
+		"src/CMakeLists.txt":                 "# output contract\n# ${CMAKE_BINARY_DIR}/bin/Aseprite.app/Contents/Resources/data\n",
+		"src/desktop/linux/aseprite.desktop": "[Desktop Entry]\nExec=aseprite %U\n",
+		"build.cmd":                          "@echo off\r\nrem upstream windows entry point\r\n",
+		"build.ps1":                          "# upstream windows wrapper\r\n",
 	}
 	for _, fn := range opts {
 		fn(files)
@@ -114,9 +115,8 @@ func TestInspectIncompleteSource(t *testing.T) {
 }
 
 func TestInspectNonDarwinIgnoresPlist(t *testing.T) {
-	// The Windows output config models platforms without a bundle
-	// output contract (Windows today; Linux later). The plist is not
-	// part of that contract.
+	// The plain output configs (Windows/Linux) model platforms without
+	// a bundle output contract. The plist is not part of them.
 	src := fixtureSource(t, func(files map[string]string) {
 		delete(files, "src/main/osx/Info.plist")
 		files["src/CMakeLists.txt"] = windowsExeDataCmake
@@ -319,12 +319,78 @@ func TestInspectWindowsUndiscoverableCMakeVersion(t *testing.T) {
 	}
 }
 
+func TestInspectLinuxContract(t *testing.T) {
+	// Linux has no Windows entry-point markers and no macOS plist: the
+	// same source shape as macOS, consumed through build.sh, with the
+	// plain executable + bin/data output contract.
+	src := fixtureSource(t, func(files map[string]string) {
+		files["src/CMakeLists.txt"] = windowsExeDataCmake
+		delete(files, "build.cmd")
+		delete(files, "build.ps1")
+		delete(files, "src/main/osx/Info.plist")
+	})
+	c, err := NewInspector().Inspect(src, ExeOutputLinux)
+	if err != nil {
+		t.Fatalf("Inspect linux: %v", err)
+	}
+	if c.OS != "linux" {
+		t.Errorf("OS = %q, want linux", c.OS)
+	}
+	if c.BundleOutput != "" {
+		t.Errorf("BundleOutput = %q, want empty for the executable contract", c.BundleOutput)
+	}
+	if c.Level != 2 {
+		t.Errorf("Level = %d, want 2", c.Level)
+	}
+	if c.BuildScript != filepath.Join(src, "build.sh") {
+		t.Errorf("BuildScript = %q, want <src>/build.sh", c.BuildScript)
+	}
+	if !strings.Contains(c.ContractFingerprint(), "os=linux") {
+		t.Errorf("fingerprint = %q, want the os=linux token", c.ContractFingerprint())
+	}
+}
+
+func TestInspectLinuxMutatedOutputContract(t *testing.T) {
+	// Upstream drops the executable/bin-data markers: fail safely with
+	// the Linux contract named.
+	src := fixtureSource(t, func(files map[string]string) {
+		files["src/CMakeLists.txt"] = "# no output rules anymore\n"
+	})
+	_, err := NewInspector().Inspect(src, ExeOutputLinux)
+	var unknown UnknownContractError
+	if err == nil || !strings.Contains(err.Error(), "Linux executable + bin/data") {
+		t.Fatalf("err = %v, want the linux output-contract failure", err)
+	}
+	if !errorsAs(err, &unknown) {
+		t.Errorf("err type = %T, want UnknownContractError", err)
+	}
+}
+
+func TestInspectLinuxMissingBuildScript(t *testing.T) {
+	// build.sh is the Linux build entry point; its absence must fail
+	// inspection rather than fall through to an unknown flow.
+	src := fixtureSource(t, func(files map[string]string) {
+		files["src/CMakeLists.txt"] = windowsExeDataCmake
+		delete(files, "build.sh")
+	})
+	_, err := NewInspector().Inspect(src, ExeOutputLinux)
+	if err == nil || !strings.Contains(err.Error(), "build.sh") {
+		t.Errorf("err = %v, want missing build.sh", err)
+	}
+}
+
 func TestExeOutputConfigOS(t *testing.T) {
 	if got := ExeOutputAppBundle.OS(); got != "darwin" {
 		t.Errorf("bundle OS = %q", got)
 	}
 	if got := ExeOutputWindows.OS(); got != "windows" {
 		t.Errorf("windows OS = %q", got)
+	}
+	if got := ExeOutputLinux.OS(); got != "linux" {
+		t.Errorf("linux OS = %q", got)
+	}
+	if got := ExeOutputConfig(0).OS(); got != "" {
+		t.Errorf("zero config OS = %q, want empty", got)
 	}
 }
 

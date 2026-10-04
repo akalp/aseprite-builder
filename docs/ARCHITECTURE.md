@@ -19,7 +19,8 @@ internal/cli    internal/tui            (frontends: parse/print / Bubble Tea)
                        ↓
         internal/dependencies, internal/aseprite build orchestration
                        ↓
-        infrastructure: runner, download, archive, upstream, paths, state, logging, version
+        infrastructure: runner, download, archive, upstream, paths, state,
+                        logging, version, packages (apt)
 ```
 
 - **UI never contains business logic.** `internal/cli` only parses
@@ -77,6 +78,7 @@ of aseprite-builder itself. Everything is resolved per-build:
 | Skia             | `laf/misc/skia-tag.txt` + `skia-url.sh` *executed from the extracted source* (bash) — or, on Windows where bash is absent, *parsed* from the script's own URL/asset templates and validated against the aseprite/skia asset list | cached verified extraction | the exact URL upstream's script resolves/encodes (`Skia-<OS>-Release-<cpu>.zip`) |
 | Xcode/SDK/clang  | probe commands (`internal/platform/darwin`)     | system-managed only — never installed by us      | Apple (not downloaded) |
 | Visual Studio / Build Tools / MSVC environment / Windows SDK | `vswhere.exe` (upstream build.cmd's discovery: `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` → `VC\Auxiliary\Build\vcvars64.bat`) + Windows Kits include probe; `vcvars64.bat && set` captures the build environment | system-managed only — never installed by us | Microsoft (not downloaded) |
+| Linux build packages (g++, clang, cmake, ninja-build, X11/GL/fontconfig dev libs) | `internal/packages/apt` reads `/etc/os-release` (ID/ID_LIKE) and probes the dpkg status database (`dpkg-query`); required package *names* are documented in the apt package (names only, never versions) | system-managed only: installed by the user (or, with explicit TTY consent, by the visible `sudo apt-get install …` the CLI runs) — never bundled, never elevated silently | the distribution's own repositories (spec §16) |
 
 Downloads are verified against upstream digests when they exist
 (Aseprite source: yes, via GitHub asset digests; aseprite/skia assets
@@ -98,6 +100,12 @@ Per platform:
   entry points (`build.cmd`, `build.ps1`) and the direct exe + `bin/data`
   output rules in `src/CMakeLists.txt`. Contracts carry an OS token in
   their fingerprint so state can tell platforms/generations apart.
+- **Linux** — the base structural markers (`build.sh`, the Skia
+  machinery, `project(aseprite)`) plus the plain `add_executable(aseprite)`
+  + `bin/data` output rules — the same non-bundle shape as Windows,
+  but consumed through upstream's `build.sh` instead of the direct-CMake
+  Windows flow. No Windows entry points or macOS plist are required;
+  the fingerprint carries `os=linux`.
 
 Unknown or mutated contracts fail before anything is built —
 `aseprite.UnknownContractError`.
@@ -142,16 +150,35 @@ the executable; a Start-Menu `.lnk` (minimal stdlib Shell Link writer)
 is created on install and removed on uninstall. No elevation, no
 registry entries.
 
+`internal/platform/linux` uses the same directory transaction under
+`~/.local/opt/aseprite` (marker next to the executable,
+`.aseprite-builder/{staging,previous}` retention, rename activation with
+rollback). After activation it refreshes the user-local integration
+best-effort and never clobbers foreign files: `~/.local/bin/aseprite`
+(a symlink only when it points into the builder's own install root),
+`~/.local/share/applications/aseprite.desktop` (upstream's own
+`src/desktop/linux/aseprite.desktop` is the template when the source
+ships one; a marker comment proves ownership on update/uninstall) and
+the hicolor icon theme (`data/icons`, sizes read from the PNG headers).
+`update-desktop-database`/`gtk-update-icon-cache` run best-effort.
+`launch` starts the installed executable detached (no terminal emulator
+assumed). Missing distribution packages are reported with the exact
+`sudo apt-get install …` command; the CLI runs it visibly only after
+explicit TTY consent (the TUI is instruction-only) — never silently,
+never from `--yes`.
+
 ## State and logs
 
 - `~/Library/Caches/aseprite-builder/` — downloads, extracted sources,
   toolchains, Skia, logs (per-operation files with full command
-  records). Windows: `%LOCALAPPDATA%\aseprite-builder\…`.
+  records). Windows: `%LOCALAPPDATA%\aseprite-builder\…`; Linux:
+  `$XDG_CACHE_HOME/aseprite-builder/…` (or `~/.cache/aseprite-builder/…`).
 - `~/Library/Application Support/aseprite-builder/` — `config.json`,
   `install.json` (the install record: version, tag, source URL,
   digest, Skia tag, contract fingerprint, install path, retained
   previous path, workspace path). Windows: `%LOCALAPPDATA%\
-  aseprite-builder\…`.
+  aseprite-builder\…`; Linux: `$XDG_DATA_HOME/aseprite-builder/…`
+  (or `~/.local/share/aseprite-builder/…`).
 
 Log redaction is enforced in `internal/logging`: environment keys
 matching credential-shaped names are recorded as `(redacted)`, and raw
@@ -161,5 +188,9 @@ environment values are never dumped.
 
 Unit tests use fake runners (`runner.FakeRunner` with exact-key and
 pattern matching), fake release providers, a fake platform, and a
-fetch hook; no Aseprite compilation happens in tests. See
-`DEVELOPMENT.md` for commands.
+fetch hook; no Aseprite compilation happens in tests. The packages
+layer (`internal/packages`, `internal/packages/apt`) is host-neutral,
+so its probes/commands are tested on every host; the linux-tagged
+platform suite compiles under `GOOS=linux go vet` and executes in a
+Linux container (or on a Linux host). See `DEVELOPMENT.md` for
+commands.

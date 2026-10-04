@@ -54,6 +54,12 @@ type BuildOutput struct {
 	// (<source>/data/icons on macOS), used to generate the native .icns
 	// bundle icons. Empty when unavailable.
 	IconsDir string
+	// DesktopFile is the upstream Linux .desktop entry
+	// (<source>/src/desktop/linux/aseprite.desktop), used as the
+	// template for the user-level desktop entry. Empty when
+	// unavailable (the Linux installer falls back to a built-in
+	// entry).
+	DesktopFile string
 }
 
 // InstallOutcome describes what the platform installer did.
@@ -128,6 +134,7 @@ func SupportedTargets() map[string][]string {
 	return map[string][]string{
 		"darwin":  {"arm64", "amd64"},
 		"windows": {"amd64"},
+		"linux":   {"amd64"},
 	}
 }
 

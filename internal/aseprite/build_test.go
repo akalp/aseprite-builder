@@ -612,6 +612,85 @@ func TestBuildUnixStillRunsBashScript(t *testing.T) {
 	}
 }
 
+// linuxFixtureBuildOutput materializes what the upstream Linux build
+// produces: bin/aseprite plus the data copy.
+func linuxFixtureBuildOutput(t *testing.T, src string) {
+	t.Helper()
+	bin := filepath.Join(src, "build", "bin")
+	if err := os.MkdirAll(filepath.Join(bin, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "aseprite"), []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "data", "akey.aset"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuildLinuxRunsBuildScriptAndLocatesPlainOutput(t *testing.T) {
+	// The Linux flow is the macOS orchestration (one bash build.sh
+	// invocation) with the plain executable + bin/data output.
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "bash" && len(c.Args) == 3 && strings.HasSuffix(c.Args[0], "build.sh") {
+			linuxFixtureBuildOutput(t, src)
+			return runner.Result{ExitCode: 0}, true
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+	out, err := b.Build(context.Background(), BuildRequest{
+		SourceDir: src,
+		Contract:  Contract{OS: "linux", Level: contractLevel, BuildScript: filepath.Join(src, "build.sh"), SkiaDirName: "skia-m124"},
+		SkiaDir:   filepath.Join(t.TempDir(), "skia-m124"),
+		CPU:       "x64",
+	})
+	if err != nil {
+		t.Fatalf("Build linux: %v", err)
+	}
+	if out.AppPath != "" {
+		t.Errorf("AppPath = %q, want empty on Linux", out.AppPath)
+	}
+	wantExe := filepath.Join(src, "build", "bin", "aseprite")
+	if out.Executable != wantExe {
+		t.Errorf("Executable = %q, want %q", out.Executable, wantExe)
+	}
+	if out.BinDir != filepath.Join(src, "build", "bin") {
+		t.Errorf("BinDir = %q", out.BinDir)
+	}
+	if out.DataDir != filepath.Join(src, "build", "bin", "data") {
+		t.Errorf("DataDir = %q", out.DataDir)
+	}
+	if out.DesktopFile != filepath.Join(src, "src", "desktop", "linux", "aseprite.desktop") {
+		t.Errorf("DesktopFile = %q, want the upstream template", out.DesktopFile)
+	}
+	if calls := r.Called(); len(calls) != 1 || calls[0].Name != "bash" {
+		t.Errorf("calls = %+v, want exactly the build.sh invocation", calls)
+	}
+}
+
+func TestBuildLinuxMissingOutputIsContractViolation(t *testing.T) {
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "bash" {
+			return runner.Result{ExitCode: 0}, true // succeeds but produces nothing
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+	_, err := b.Build(context.Background(), BuildRequest{
+		SourceDir: src,
+		Contract:  Contract{OS: "linux", Level: contractLevel, BuildScript: filepath.Join(src, "build.sh"), SkiaDirName: "skia-m124"},
+		SkiaDir:   filepath.Join(t.TempDir(), "skia-m124"),
+		CPU:       "x64",
+	})
+	var cve *ContractViolationError
+	if !errors.As(err, &cve) || !strings.Contains(cve.Reason, "aseprite") {
+		t.Fatalf("err = %v (%T), want the Linux output contract violation", err, err)
+	}
+}
+
 // anyVersionFaker answers --version for the fixture's fake executable
 // with a plausible Aseprite version banner.
 func anyVersionFaker() func(runner.Command) (runner.Result, bool) {

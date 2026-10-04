@@ -29,6 +29,12 @@ type Command struct {
 	Dir string
 	// Stdin optionally supplies bytes for the process's stdin.
 	Stdin []byte
+	// Interactive, when true, connects the child directly to the
+	// caller's stdin/stdout/stderr instead of capturing output. Used
+	// for privileged package installation the user explicitly
+	// consented to watch (spec §16: never silently invoke sudo, never
+	// strip the terminal). Takes precedence over Stdin.
+	Interactive bool
 }
 
 // String is used for correlation keys and logging.
@@ -84,6 +90,14 @@ type Runner interface {
 	Run(ctx context.Context, cmd Command) (Result, error)
 }
 
+// Detacher is an optional Runner capability: start a command without
+// waiting for it to exit. The builder uses it to launch installed GUI
+// applications so the CLI/TUI keep running after the app starts.
+// Callers type-assert; FakeRunner-based tests simply observe Run calls.
+type Detacher interface {
+	StartDetached(ctx context.Context, cmd Command) error
+}
+
 // ConcreteRunner is the default Runner, spawning real OS processes.
 // Stream optionally receives live combined stdout/stderr; captured
 // output is always returned in the Result regardless.
@@ -96,7 +110,8 @@ type ConcreteRunner struct {
 func NewConcreteRunner() ConcreteRunner { return ConcreteRunner{} }
 
 // Run implements Runner using exec.CommandContext. Output is always
-// captured; when Stream is set it is also forwarded live.
+// captured; when Stream is set it is also forwarded live. Interactive
+// commands own the terminal and are therefore not captured.
 func (r ConcreteRunner) Run(ctx context.Context, cmd Command) (Result, error) {
 	c := exec.CommandContext(ctx, cmd.Name, cmd.Args...) //nolint:gosec // arguments come from trusted app logic
 	if cmd.Dir != "" {
@@ -104,6 +119,9 @@ func (r ConcreteRunner) Run(ctx context.Context, cmd Command) (Result, error) {
 	}
 	if len(cmd.Env) > 0 {
 		c.Env = append(os.Environ(), cmd.Env...)
+	}
+	if cmd.Interactive {
+		return runInteractive(c, cmd)
 	}
 	var stdout, stderr bytes.Buffer
 	if r.Stream != nil {
@@ -145,6 +163,54 @@ func (r ConcreteRunner) Run(ctx context.Context, cmd Command) (Result, error) {
 		ExitCode: 0,
 		Duration: duration,
 	}, nil
+}
+
+// runInteractive executes cmd with the caller's terminal attached and
+// returns only the exit outcome (output is not captured — the user is
+// watching it live).
+func runInteractive(c *exec.Cmd, cmd Command) (Result, error) {
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	start := time.Now()
+	err := c.Run()
+	duration := time.Since(start)
+	if exitErr, ok := err.(*exec.ExitError); ok { //nolint:errorlint // exec.ExitError is precise enough here
+		code := exitErr.ExitCode()
+		return Result{ExitCode: code, Duration: duration},
+			ErrExit{ExitCode: code, Cmd: cmd.String()}
+	}
+	if err != nil {
+		return Result{}, fmt.Errorf("run %s: %w", cmd.Name, err)
+	}
+	return Result{Duration: duration}, nil
+}
+
+// StartDetached implements Detacher: the process starts with stdio on
+// the null device and is released, so its lifetime is independent of
+// the caller. ctx is only consulted before starting — a cancelled
+// install must not kill the application it just launched.
+func (r ConcreteRunner) StartDetached(ctx context.Context, cmd Command) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c := exec.Command(cmd.Name, cmd.Args...) //nolint:gosec // arguments come from trusted app logic
+	if cmd.Dir != "" {
+		c.Dir = cmd.Dir
+	}
+	if len(cmd.Env) > 0 {
+		c.Env = append(os.Environ(), cmd.Env...)
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", os.DevNull, err)
+	}
+	defer func() { _ = devNull.Close() }()
+	c.Stdin, c.Stdout, c.Stderr = devNull, devNull, devNull
+	if err := c.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", cmd.Name, err)
+	}
+	return c.Process.Release()
 }
 
 // NopRunner is a Runner that accepts any command and returns a fixed

@@ -51,9 +51,15 @@ type BuildOutput struct {
 	// BuildDir is the directory the upstream build wrote into.
 	BuildDir string
 	// IconsDir is the upstream icon set directory (data/icons) used by
-	// the macOS installer to generate .icns bundle icons. Empty when
-	// the source tree does not ship one.
+	// the macOS installer to generate .icns bundle icons and by the
+	// Linux installer for the hicolor theme. Empty when the source
+	// tree does not ship one.
 	IconsDir string
+	// DesktopFile is the upstream Linux desktop entry
+	// (src/desktop/linux/aseprite.desktop) used as the template for
+	// the user-level entry. Empty when the source tree does not ship
+	// one.
+	DesktopFile string
 }
 
 // Builder orchestrates the upstream build flow. It does not reimplement
@@ -309,29 +315,55 @@ func buildEnv(extraBinDirs []string) []string {
 }
 
 // locateBuildOutput finds the artifact at the path the recognized
-// contract defines. On macOS it is the application bundle; on Windows
-// the plain executable plus the data directory next to it.
+// contract defines. On macOS it is the application bundle; on
+// Windows/Linux the plain executable plus the data directory next to
+// it.
 func locateBuildOutput(req BuildRequest) (BuildOutput, error) {
 	binDir := filepath.Join(req.SourceDir, "build", "bin")
 	switch req.Contract.OS {
 	case "windows":
 		return locateWindowsBuildOutput(req, binDir)
+	case "linux":
+		return locateLinuxBuildOutput(req, binDir)
 	default:
 		return locateAppBundleOutput(req, binDir)
 	}
 }
 
+// linuxExeName is the executable the upstream Linux build produces
+// (see build.sh: the exe-only layout writes bin/aseprite).
+const linuxExeName = "aseprite"
+
 // locateWindowsBuildOutput validates the Windows exe + bin/data
 // output contract.
 func locateWindowsBuildOutput(req BuildRequest, binDir string) (BuildOutput, error) {
+	return locatePlainBuildOutput(req, binDir, windowsExeName, "Windows")
+}
+
+// locateLinuxBuildOutput validates the Linux executable + bin/data
+// output contract — the same non-bundle shape as Windows, produced
+// through upstream's build.sh — and attaches the upstream desktop
+// entry template.
+func locateLinuxBuildOutput(req BuildRequest, binDir string) (BuildOutput, error) {
+	out, err := locatePlainBuildOutput(req, binDir, linuxExeName, "Linux")
+	if err != nil {
+		return out, err
+	}
+	out.DesktopFile = sourceDesktopFile(req.SourceDir)
+	return out, nil
+}
+
+// locatePlainBuildOutput validates a non-bundle executable + bin/data
+// build output contract (shared by Windows and Linux).
+func locatePlainBuildOutput(req BuildRequest, binDir, exeName, osLabel string) (BuildOutput, error) {
 	violation := func(reason string) (BuildOutput, error) {
 		return BuildOutput{}, &ContractViolationError{Stage: "build output", Reason: reason}
 	}
-	exe := filepath.Join(binDir, windowsExeName)
+	exe := filepath.Join(binDir, exeName)
 	fi, err := os.Stat(exe)
 	if err != nil || fi.IsDir() {
 		return violation(fmt.Sprintf(
-			"the upstream build did not produce %s (the Windows output contract this builder relies on)", exe))
+			"the upstream build did not produce %s (the %s output contract this builder relies on)", exe, osLabel))
 	}
 	data := filepath.Join(binDir, "data")
 	if runtimeDataEmpty(data) {
@@ -339,7 +371,7 @@ func locateWindowsBuildOutput(req BuildRequest, binDir string) (BuildOutput, err
 			"the built data directory %s is empty; the upstream data copy step did not run", data))
 	}
 	return BuildOutput{
-		AppPath:    "", // no bundle on Windows
+		AppPath:    "", // no bundle in the plain layout
 		Executable: exe,
 		BinDir:     binDir,
 		DataDir:    data,
@@ -379,11 +411,25 @@ func locateAppBundleOutput(req BuildRequest, binDir string) (BuildOutput, error)
 // sourceIconsDir returns the upstream icon set directory when present.
 // The official source ships data/icons with size-named PNG members
 // (ase16.png … ase256.png, plus hd/asehd.png), which macOS uses to
-// generate .icns bundle icons.
+// generate .icns bundle icons and Linux installs into the hicolor
+// theme.
 func sourceIconsDir(sourceDir string) string {
 	icons := filepath.Join(sourceDir, "data", "icons")
 	if fi, err := os.Stat(icons); err == nil && fi.IsDir() {
 		return icons
+	}
+	return ""
+}
+
+// sourceDesktopFile returns the upstream Linux desktop entry when the
+// source tree ships one. The Linux installer templates its Exec and
+// TryExec lines onto the installed executable, so upstream metadata
+// (MIME types, categories) tracks the source release without builder
+// changes.
+func sourceDesktopFile(sourceDir string) string {
+	p := filepath.Join(sourceDir, "src", "desktop", "linux", "aseprite.desktop")
+	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+		return p
 	}
 	return ""
 }

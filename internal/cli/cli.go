@@ -33,6 +33,9 @@ type CLI struct {
 	// ServiceFactory constructs the app service; nil uses the real
 	// infrastructure wiring.
 	ServiceFactory func(ctx context.Context, builderVersion string, verifyPlatform bool) (*app.Service, error)
+	// ForceTTY makes the CLI treat its input as an interactive terminal
+	// (test-only; production derives it from os.Stdin).
+	ForceTTY bool
 }
 
 // Run dispatches os.Args. It returns the process exit code.
@@ -229,6 +232,16 @@ func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
 	}
 
 	fmt.Fprintln(c.Stderr, strings.TrimSpace(licenseNotice))
+
+	// System packages (Linux): missing dependencies are shown with the
+	// exact command, and only explicit TTY consent runs the visible
+	// sudo install. --yes never approves this step (spec §16).
+	if ok, err := c.ensureSystemPackages(ctx, svc); !ok {
+		if err != nil {
+			c.printServiceError(err)
+		}
+		return int(exitCode(1))
+	}
 
 	opts := app.InstallOptions{
 		Version:               strings.TrimSpace(*v.Version),

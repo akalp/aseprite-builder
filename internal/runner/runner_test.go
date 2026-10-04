@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -78,4 +79,41 @@ func TestResultCombined(t *testing.T) {
 func TestNewConcreteRunnerExists(t *testing.T) {
 	// Sanity: constructor returns a usable Runner without touching the disk.
 	var _ Runner = NewConcreteRunner()
+}
+
+func TestConcreteRunnerInteractiveExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("interactive smoke test uses /bin/sh")
+	}
+	res, err := (ConcreteRunner{}).Run(context.Background(), Command{
+		Name:        "/bin/sh",
+		Args:        []string{"-c", "exit 3"},
+		Interactive: true,
+	})
+	var exitErr ErrExit
+	if !errors.As(err, &exitErr) || exitErr.ExitCode != 3 {
+		t.Fatalf("err = %v, want ErrExit with code 3", err)
+	}
+	if res.ExitCode != 3 {
+		t.Errorf("result exit = %d, want 3", res.ExitCode)
+	}
+	if res.Stdout != "" || res.Stderr != "" {
+		t.Errorf("interactive output must not be captured: %+v", res)
+	}
+}
+
+func TestConcreteRunnerStartDetached(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("detached smoke test uses /bin/sh")
+	}
+	var d Detacher = ConcreteRunner{}
+	if err := d.StartDetached(context.Background(), Command{Name: "/bin/sh", Args: []string{"-c", "true"}}); err != nil {
+		t.Fatalf("StartDetached: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.StartDetached(ctx, Command{Name: "/bin/sh"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled ctx err = %v, want context.Canceled", err)
+	}
 }

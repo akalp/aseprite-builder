@@ -29,6 +29,10 @@ var cmakeAssetRe = regexp.MustCompile(`^cmake-([0-9]+\.[0-9]+\.[0-9]+)-macos-uni
 // asset, e.g. cmake-4.1.2-windows-x86_64.zip.
 var windowsCmakeAssetRe = regexp.MustCompile(`^cmake-([0-9]+\.[0-9]+\.[0-9]+)-windows-x86_64\.zip$`)
 
+// linuxCmakeAssetRe matches CMake's Linux x86_64 binary distribution
+// asset, e.g. cmake-4.4.4-linux-x86_64.tar.gz.
+var linuxCmakeAssetRe = regexp.MustCompile(`^cmake-([0-9]+\.[0-9]+\.[0-9]+)-linux-x86_64\.tar\.gz$`)
+
 // CMakeFetcher downloads the latest stable CMake binary distribution
 // into the user-local tool cache. It resolves the version at runtime
 // from upstream metadata; no version is pinned.
@@ -47,6 +51,9 @@ type CMakeFetcher struct {
 	// macOS one. Set by platform-specific wiring; zero value is the
 	// macOS flow so existing callers are unchanged.
 	windows bool
+	// linux selects the Linux distribution flow
+	// (cmake-*-linux-x86_64.tar.gz → bin/cmake).
+	linux bool
 }
 
 // NewWindowsCMakeFetcher returns a CMakeFetcher that resolves the
@@ -55,8 +62,15 @@ func NewWindowsCMakeFetcher(layout paths.Layout, client *upstream.Client) CMakeF
 	return CMakeFetcher{Layout: layout, Client: client, windows: true}
 }
 
-// Fetch implements Fetcher by resolving the newest stable CMake macOS
-// universal tarball from upstream, downloading and installing it.
+// NewLinuxCMakeFetcher returns a CMakeFetcher that resolves the Linux
+// x86_64 distribution.
+func NewLinuxCMakeFetcher(layout paths.Layout, client *upstream.Client) CMakeFetcher {
+	return CMakeFetcher{Layout: layout, Client: client, linux: true}
+}
+
+// Fetch implements Fetcher by resolving the newest stable CMake
+// distribution for this platform from upstream, downloading and
+// installing it.
 func (f CMakeFetcher) Fetch(ctx context.Context) (Tool, error) {
 	client := f.Client
 	if client == nil {
@@ -69,9 +83,13 @@ func (f CMakeFetcher) Fetch(ctx context.Context) (Tool, error) {
 
 	re := cmakeAssetRe
 	finish := f.install
-	if f.windows {
+	switch {
+	case f.windows:
 		re = windowsCmakeAssetRe
 		finish = f.installWindows
+	case f.linux:
+		re = linuxCmakeAssetRe
+		finish = f.installLinux
 	}
 
 	for _, rel := range releases {
@@ -208,6 +226,49 @@ func (f CMakeFetcher) windowsTool(cacheDir string, v version.Version) (Tool, err
 	}, nil
 }
 
+// installLinux installs the CMake Linux x86_64 distribution: a tar.gz
+// whose cmake-<ver>-linux-x86_64 wrapper directory contains bin/cmake.
+func (f CMakeFetcher) installLinux(ctx context.Context, assetName, url, sha256 string, v version.Version) (Tool, error) {
+	layout := f.Layout
+	cacheDir := CacheDirFor(layout, "cmake", v.String())
+	if isExecutableFile(filepath.Join(cacheDir, "bin", "cmake")) {
+		t, err := f.tool(cacheDir, v)
+		if err == nil {
+			t.Source = "cache"
+		}
+		return t, err // already cached
+	}
+
+	httpClient := f.HTTP
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	dl := &download.Downloader{HTTPClient: httpClient, UserAgent: f.userAgent()}
+	archivePath := layout.DownloadFile("cmake", assetName)
+	if f.Log != nil {
+		f.Log("downloading CMake %s from %s", v, assetName)
+	}
+	if err := dl.Fetch(ctx, url, archivePath, sha256, f.Progress); err != nil {
+		return Tool{}, fmt.Errorf("download CMake archive: %w", err)
+	}
+	if err := extractNormalized(archivePath, cacheDir, archive.UntarGz, archive.TarGzTopLevelDir, stripWrapperDir); err != nil {
+		return Tool{}, err
+	}
+	if err := os.Remove(archivePath); err != nil && !os.IsNotExist(err) {
+		return Tool{}, fmt.Errorf("remove downloaded archive: %w", err)
+	}
+	t, err := f.tool(cacheDir, v)
+	if err != nil {
+		_ = os.RemoveAll(cacheDir)
+		if f.Log != nil {
+			f.Log("removing unusable CMake cache dir %s", cacheDir)
+		}
+		return Tool{}, fmt.Errorf("verify downloaded CMake: %w", err)
+	}
+	t.Source = "cache"
+	return t, nil
+}
+
 // ninjaRepo is Ninja's authoritative repository.
 const ninjaRepo = "ninja-build/ninja"
 
@@ -216,6 +277,9 @@ var ninjaAssetRe = regexp.MustCompile(`^ninja-mac\.zip$`)
 
 // windowsNinjaAssetRe matches Ninja's Windows asset.
 var windowsNinjaAssetRe = regexp.MustCompile(`^ninja-win\.zip$`)
+
+// linuxNinjaAssetRe matches Ninja's Linux x86_64 asset.
+var linuxNinjaAssetRe = regexp.MustCompile(`^ninja-linux\.zip$`)
 
 // NinjaFetcher downloads the latest stable Ninja binary into the
 // user-local tool cache.
@@ -230,12 +294,21 @@ type NinjaFetcher struct {
 	// windows selects the Windows distribution flow (ninja-win.zip →
 	// ninja.exe) instead of the macOS one.
 	windows bool
+	// linux selects the Linux distribution flow (ninja-linux.zip →
+	// ninja) instead of the macOS one.
+	linux bool
 }
 
 // NewWindowsNinjaFetcher returns a NinjaFetcher that resolves the
 // Windows distribution.
 func NewWindowsNinjaFetcher(layout paths.Layout, client *upstream.Client) NinjaFetcher {
 	return NinjaFetcher{Layout: layout, Client: client, windows: true}
+}
+
+// NewLinuxNinjaFetcher returns a NinjaFetcher that resolves the Linux
+// x86_64 distribution.
+func NewLinuxNinjaFetcher(layout paths.Layout, client *upstream.Client) NinjaFetcher {
+	return NinjaFetcher{Layout: layout, Client: client, linux: true}
 }
 
 // Fetch implements Fetcher for Ninja.
@@ -250,8 +323,11 @@ func (n NinjaFetcher) Fetch(ctx context.Context) (Tool, error) {
 	}
 
 	re := ninjaAssetRe
-	if n.windows {
+	switch {
+	case n.windows:
 		re = windowsNinjaAssetRe
+	case n.linux:
+		re = linuxNinjaAssetRe
 	}
 
 	for _, rel := range releases {

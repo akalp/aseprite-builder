@@ -1,6 +1,9 @@
 # Phase 3 — Linux, Debian/Ubuntu vertical slice (Spec Milestone 5)
 
-**Status:** Planned
+**Status:** ✅ Implemented (2026-10-04) — `make check` green on macOS;
+`GOOS=linux GOARCH=amd64 go vet ./...` clean; the full suite (including the
+linux-tagged platform tests) green in a Linux container. Real-VM smoke E2E
+pending, as planned. Decision record below.
 **Spec:** §11 (Linux targets), §16 (Linux system-managed packages), §22 (Linux), §18 (abstraction), §33 (privilege safety)
 **Depends on:** Phase 1 (frontends share the same services)
 
@@ -112,3 +115,45 @@ internal/packages/
 - AGENTS.md layer graph updated with `internal/packages`;
   ARCHITECTURE.md resolution table gains a Linux row; plan table
   updated.
+
+## Decisions (2026-10-04)
+
+1. **Install layout: flat directory + retention.** `~/.local/opt/aseprite`
+   holds the active install (executable + `data/`, ownership marker next
+   to the executable), with `.aseprite-builder/{staging,previous}` for
+   the transactional swap. This mirrors the Windows/macOS installer code
+   exactly rather than the versioned `…/aseprite/<version>` sketch in
+   the scope text; the spec §22 flat path wins.
+2. **Consent: CLI full, TUI instruction-only.** The CLI's pre-flight
+   (`ensureSystemPackages`) shows the exact command and, only on a live
+   TTY after an explicit confirmation, runs the visible interactive
+   `sudo apt-get install …` (terminal attached; no output capture) then
+   re-checks once. The TUI and doctor always render the same command via
+   the shared Requirements check/Fix text. `--yes` never approves the
+   sudo step.
+3. **Linux CMake/Ninja download fallbacks exist**
+   (`cmake-*-linux-x86_64.tar.gz` → `bin/cmake`, `ninja-linux.zip` →
+   `ninja`) so the resolver's system→cache→download chain is complete
+   when a distribution cmake is older than the source's discovered
+   minimum.
+4. **Launch uses a detached start** (`runner.Detacher` implemented by
+   `ConcreteRunner`): the installed executable is started with stdio on
+   the null device and released; no terminal emulator is assumed.
+5. **`contractLevel` stays 2** and Linux carries `os=linux` in the
+   fingerprint: the recognized contract *shape* did not change, only the
+   set of platforms understood under the same level-2 semantics.
+6. **arm64 deferred** — `SupportedTargets` gains `linux:{amd64}` only;
+   arm64 is a follow-up decided with evidence.
+7. **No Linux-only extra markers**: `build.sh` is already in the base
+   required-files set, and the executable + `bin/data` rules are shared
+   with the Windows contract (renamed to the neutral
+   `plainExeOutputRe`/`plainDataOutputRe`).
+
+**Status against the tests/DoD list:** implemented and unit-tested in a
+Linux container (detection fixtures, requirement composition, dpkg
+probes → missing packages → exact command, consent gating incl. `--yes`
+never approving, install staging/retention/rollback, symlink/desktop/
+icon lifecycle with foreign-file protection, owned-only uninstall,
+detached launch, Linux contract mutations). What remains is the real-VM
+smoke run — like Phase 2, it is deferred to the Phase 5 CI/E2E work,
+not to a code change.
