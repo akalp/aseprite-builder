@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/akalp/aseprite-builder/internal/aseprite"
 	"github.com/akalp/aseprite-builder/internal/dependencies"
 	"github.com/akalp/aseprite-builder/internal/logging"
 	"github.com/akalp/aseprite-builder/internal/platform"
@@ -22,8 +25,25 @@ type DoctorReport struct {
 	Requirements []platform.Check     `json:"requirements"`
 	Tools        []dependencies.Check `json:"tools"`
 	Skia         SkiaDoctor           `json:"skia"`
+	Contract     *ContractDoctor      `json:"contract,omitempty"`
 	Installation *InstallationDoctor  `json:"installation,omitempty"`
+	Integration  *IntegrationDoctor   `json:"integration,omitempty"`
 	Status       string               `json:"status"` // "healthy" | "issues"
+}
+
+// ContractDoctor summarizes the build contract of a cached source tree.
+type ContractDoctor struct {
+	Source      string `json:"source,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Recognized  bool   `json:"recognized"`
+}
+
+// IntegrationDoctor summarizes user-local integration health (Linux
+// CLI symlink / desktop entry / icons). Present only when the platform
+// can validate its integration and an installation exists.
+type IntegrationDoctor struct {
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // SkiaDoctor summarizes the Skia artifact cache.
@@ -99,6 +119,10 @@ func (s *Service) Doctor(ctx context.Context) (DoctorReport, error) {
 	// Skia cache
 	report.Skia = s.skiaDoctor()
 
+	// Cached source build contract: re-inspected cheaply, exactly like
+	// the install pipeline would (spec §28).
+	report.Contract = s.contractDoctor(info)
+
 	// Installation
 	inst, hasInstall, err := s.CurrentInstall()
 	switch {
@@ -113,10 +137,69 @@ func (s *Service) Doctor(ctx context.Context) (DoctorReport, error) {
 			Healthy:          healthy,
 			HealthyChecked:   true,
 		}
+		if checker, ok := s.opts.Platform.(platform.IntegrationDoctor); ok {
+			integOK, detail := checker.CheckIntegration()
+			report.Integration = &IntegrationDoctor{OK: integOK, Detail: detail}
+		}
 	}
 
 	report.Status = report.overallStatus()
 	return report, nil
+}
+
+// contractDoctor inspects a cached source tree the way the pipeline
+// would: the installed workspace first, then the newest builder-owned
+// source. No cached source means no row (the contract is verified at
+// install time).
+func (s *Service) contractDoctor(info platform.SystemInfo) *ContractDoctor {
+	dir := ""
+	if inst, has, err := s.CurrentInstall(); err == nil && has && inst.WorkspacePath != "" {
+		if _, statErr := os.Stat(filepath.Join(inst.WorkspacePath, "CMakeLists.txt")); statErr == nil {
+			dir = inst.WorkspacePath
+		}
+	}
+	if dir == "" {
+		dir = s.newestSourceTree()
+	}
+	if dir == "" {
+		return nil
+	}
+	inspector := aseprite.NewInspector()
+	contract, err := inspector.Inspect(dir, outputConfigFor(info.OS))
+	if err != nil {
+		return &ContractDoctor{Source: dir, Recognized: false}
+	}
+	return &ContractDoctor{Source: dir, Fingerprint: contract.ContractFingerprint(), Recognized: true}
+}
+
+// newestSourceTree returns the newest builder-owned aseprite-* source
+// tree carrying a CMakeLists.txt, or "".
+func (s *Service) newestSourceTree() string {
+	entries, err := os.ReadDir(s.opts.Layout.Sources)
+	if err != nil {
+		return ""
+	}
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "aseprite-") {
+			continue
+		}
+		dir := filepath.Join(s.opts.Layout.Sources, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "CMakeLists.txt")); err == nil {
+			dirs = append(dirs, dir)
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		vi := strings.TrimPrefix(filepath.Base(dirs[i]), "aseprite-")
+		vj := strings.TrimPrefix(filepath.Base(dirs[j]), "aseprite-")
+		vi = strings.TrimPrefix(vi, "dev-")
+		vj = strings.TrimPrefix(vj, "dev-")
+		return vi > vj // newest first by lexical version-ish order
+	})
+	if len(dirs) == 0 {
+		return ""
+	}
+	return dirs[0]
 }
 
 // minCForDoctor reports the *minimum* constraint as "any" when no
@@ -160,7 +243,13 @@ func (r DoctorReport) overallStatus() string {
 			return "issues"
 		}
 	}
+	if r.Contract != nil && !r.Contract.Recognized {
+		return "issues"
+	}
 	if r.Installation != nil && r.Installation.HealthyChecked && !r.Installation.Healthy {
+		return "issues"
+	}
+	if r.Integration != nil && !r.Integration.OK {
 		return "issues"
 	}
 	return "healthy"
@@ -210,6 +299,13 @@ func (r DoctorReport) DoctorRows() []DoctorRow {
 	} else {
 		rowOK("Skia", "no cached artifact (resolved during install)")
 	}
+	if r.Contract != nil {
+		if r.Contract.Recognized {
+			rowOK("Build contract", "recognized ("+r.Contract.Fingerprint+")")
+		} else {
+			rowFail("Build contract", "cached source at "+r.Contract.Source+" is not recognized — run repair or reinstall")
+		}
+	}
 	if r.Installation != nil && r.Installation.HealthyChecked {
 		if r.Installation.Healthy {
 			rowOK("Installation", fmt.Sprintf("Aseprite %s at %s", r.Installation.InstalledVersion, r.Installation.AppPath))
@@ -218,6 +314,13 @@ func (r DoctorReport) DoctorRows() []DoctorRow {
 		}
 	} else {
 		rowOK("Installation", "none (nothing installed yet)")
+	}
+	if r.Integration != nil {
+		if r.Integration.OK {
+			rowOK("CLI integration", r.Integration.Detail)
+		} else {
+			rowFail("CLI integration", r.Integration.Detail)
+		}
 	}
 	return rows
 }

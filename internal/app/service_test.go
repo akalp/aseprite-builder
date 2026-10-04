@@ -29,8 +29,19 @@ type fakePlatform struct {
 	installed        string // version marker
 	failInstall      bool
 	launchCalls      int
+	installCalls     int
 	installRoot      string // custom install root override ("" → default)
 	disableRetention bool
+
+	// Targeted repair surface (platform.Repairer).
+	repaired      bool
+	repairReq     platform.RepairRequest
+	repairActions []string
+	repairErr     error
+
+	// Integration doctor surface (platform.IntegrationDoctor).
+	integrationOK     *bool // nil → OK with a neutral detail
+	integrationDetail string
 }
 
 func (f *fakePlatform) Detect(context.Context) (platform.SystemInfo, error) {
@@ -47,6 +58,7 @@ func (f *fakePlatform) Requirements(context.Context) ([]platform.Check, error) {
 func (f *fakePlatform) Prepare(context.Context) error { return nil }
 
 func (f *fakePlatform) Install(_ context.Context, out platform.BuildOutput) (platform.InstallOutcome, error) {
+	f.installCalls++
 	if f.failInstall {
 		return platform.InstallOutcome{}, errors.New("simulated install failure")
 	}
@@ -81,6 +93,21 @@ func (f *fakePlatform) SetInstallRoot(root string) error {
 
 // SetRetainPrevious implements platform.RetentionSetter.
 func (f *fakePlatform) SetRetainPrevious(retain bool) { f.disableRetention = !retain }
+
+// RepairTargeted implements platform.Repairer.
+func (f *fakePlatform) RepairTargeted(_ context.Context, req platform.RepairRequest) ([]string, error) {
+	f.repaired = true
+	f.repairReq = req
+	return f.repairActions, f.repairErr
+}
+
+// CheckIntegration implements platform.IntegrationDoctor.
+func (f *fakePlatform) CheckIntegration() (bool, string) {
+	if f.integrationOK == nil {
+		return true, "fake integration ok"
+	}
+	return *f.integrationOK, f.integrationDetail
+}
 
 // fakeReleases serves a fixed release list.
 type fakeReleases struct {

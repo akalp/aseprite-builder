@@ -135,6 +135,33 @@ type RetentionSetter interface {
 	SetRetainPrevious(retain bool)
 }
 
+// RepairRequest carries the builder's installed facts to a targeted
+// platform repair (spec §25).
+type RepairRequest struct {
+	// AppPath is the installed application path.
+	AppPath string
+	// Version is the recorded Aseprite version.
+	Version string
+	// SourceDir is the cached source tree used for templates when one
+	// exists ("" allowed).
+	SourceDir string
+}
+
+// Repairer is an optional Platform capability for targeted repairs
+// that do not require a rebuild (spec §25): stale staging left by an
+// interrupted update, broken CLI symlinks, missing desktop entries.
+// The returned actions are human-readable descriptions of what was
+// fixed; an empty slice means nothing needed fixing.
+type Repairer interface {
+	RepairTargeted(ctx context.Context, req RepairRequest) ([]string, error)
+}
+
+// IntegrationDoctor is an optional Platform capability for validating
+// user-local integration in doctor (spec §28).
+type IntegrationDoctor interface {
+	CheckIntegration() (ok bool, detail string)
+}
+
 // CurrentArch maps runtime architecture to the builder's canonical
 // naming (amd64 → amd64 etc.). Only a convenience for Detect
 // implementations.

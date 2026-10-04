@@ -148,8 +148,22 @@ func (s *Service) Repair(ctx context.Context, sink ProgressSink) (InstallResult,
 	defer func() { _ = log.Close() }()
 	log.Line("repair: checking installation at %s", current.AppPath)
 
+	// Consistency first: a recorded previous installation that no
+	// longer exists cannot roll anything back; clear the record so the
+	// state tells the truth (spec §25).
+	if current.PreviousAppPath != "" {
+		if _, err := os.Stat(current.PreviousAppPath); err != nil {
+			log.Line("repair: retained previous installation %s is missing; clearing the record", current.PreviousAppPath)
+			current.PreviousAppPath = ""
+			if saveErr := s.opts.Store.SaveInstall(current); saveErr != nil {
+				log.Line("note: could not update install state: %v", saveErr)
+			}
+		}
+	}
+
 	if healthy := s.installationHealthy(ctx, current, log); healthy {
 		log.Line("repair: installation looks healthy; nothing to do")
+		s.repairTargeted(ctx, current, log)
 		return InstallResult{Version: current.AsepriteVersion, AppPath: current.AppPath, LogPath: logPath}, nil
 	}
 
@@ -176,17 +190,52 @@ func (s *Service) Repair(ctx context.Context, sink ProgressSink) (InstallResult,
 	return result, nil
 }
 
-// installationHealthy checks the installed bundle markers.
+// installationHealthy checks the installed bundle markers and the
+// recorded state. A missing or mismatched ownership marker is as
+// unhealthy as a broken executable (spec §25).
 func (s *Service) installationHealthy(ctx context.Context, current state.InstallState, log *logging.Logger) bool {
 	info, err := os.Stat(current.AppPath)
 	if err != nil || !info.IsDir() {
 		log.Line("repair: app bundle missing or unreadable: %v", err)
 		return false
 	}
+	v, err := s.opts.Platform.InstalledVersion(ctx)
+	switch {
+	case err != nil:
+		log.Line("repair: ownership marker unreadable: %v", err)
+		return false
+	case v == "":
+		log.Line("repair: ownership marker missing from %s", current.AppPath)
+		return false
+	case v != current.AsepriteVersion:
+		log.Line("repair: ownership marker version %q does not match recorded %q", v, current.AsepriteVersion)
+		return false
+	}
 	if err := s.verifyInstalledBundle(ctx, current, log); err != nil {
 		return false
 	}
 	return true
+}
+
+// repairTargeted runs the platform's cheap, non-rebuild repairs (stale
+// staging, broken CLI symlink, missing desktop entry) and logs every
+// action explicitly (spec §25).
+func (s *Service) repairTargeted(ctx context.Context, current state.InstallState, log *logging.Logger) {
+	repairer, ok := s.opts.Platform.(platform.Repairer)
+	if !ok {
+		return
+	}
+	actions, err := repairer.RepairTargeted(ctx, platform.RepairRequest{
+		AppPath:   current.AppPath,
+		Version:   current.AsepriteVersion,
+		SourceDir: current.WorkspacePath,
+	})
+	for _, a := range actions {
+		log.Line("repair: %s", a)
+	}
+	if err != nil {
+		log.Line("note: targeted repair could not complete: %v", err)
+	}
 }
 
 // UninstallOptions selects the scope of uninstall.
