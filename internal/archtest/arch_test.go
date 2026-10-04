@@ -127,6 +127,9 @@ func TestCIWorkflowCoversRequiredJobs(t *testing.T) {
 		"ubuntu-latest",
 		"macos-latest",
 		"windows-latest",
+		// Formatting runs on the current stable Go, separately from the
+		// go.mod-pinned vet/test matrix (gofmt output differs by release).
+		"go-version: stable",
 		"go test ./...",
 		"go run ./cmd/releasecheck",
 		"doctor --json",
@@ -157,6 +160,7 @@ func TestReleaseWorkflowPublishesTaggedArtifacts(t *testing.T) {
 		"go run ./cmd/release",
 		"go run ./cmd/releasecheck",
 		"gh release",
+		"--prerelease",
 	}
 	for _, want := range required {
 		if !strings.Contains(content, want) {

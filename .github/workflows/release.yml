@@ -70,8 +70,13 @@ jobs:
         shell: bash
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
+          # Hyphenated tags (v0.1.0-rc.1, -beta…) publish as prereleases.
+          prerelease=0
+          case "$tag" in *-*) prerelease=1 ;; esac
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
+          elif [ "$prerelease" = 1 ]; then
+            gh release create "$tag" dist/* --title "$tag" --generate-notes --prerelease
           else
             gh release create "$tag" dist/* --title "$tag" --generate-notes
           fi

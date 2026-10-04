@@ -30,6 +30,12 @@ go run ./cmd/aseprite-builder help
 go run ./cmd/aseprite-builder doctor --json
 ```
 
+Formatting is checked in CI with the **current stable Go**, while
+vet/tests run on the toolchain pinned by `go.mod` (so the minimum
+supported Go stays proven). `gofmt` output can differ between Go
+releases, so format with an up-to-date Go (`make fmt`) and let CI
+confirm.
+
 Running the binary with no arguments in a terminal opens the
 interactive TUI (spec §30); all subcommands use the non-interactive
 CLI. The TUI is only opened for real terminals — piped stdout prints
