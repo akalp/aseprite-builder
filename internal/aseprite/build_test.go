@@ -364,6 +364,254 @@ func TestUpstreamBuildErrorMessage(t *testing.T) {
 	}
 }
 
+// windowsFixtureBuildOutput materializes what the upstream Windows
+// build produces: bin/aseprite.exe plus the data copy.
+func windowsFixtureBuildOutput(t *testing.T, src, version string) {
+	t.Helper()
+	bin := filepath.Join(src, "build", "bin")
+	if err := os.MkdirAll(filepath.Join(bin, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "aseprite.exe"), []byte("PE32"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "data", "akey.aset"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = version
+}
+
+// wireWindowsBuildFake answers the two cmake commands, materializing
+// the fixture output when the build step "runs", and the produced
+// executable's --version probe.
+func wireWindowsBuildFake(src string, materialize func()) func(runner.Command) (runner.Result, bool) {
+	return func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "cmake" && len(c.Args) > 0 {
+			switch c.Args[0] {
+			case "-B":
+				return runner.Result{ExitCode: 0}, true // configure
+			case "--build":
+				materialize()
+				return runner.Result{ExitCode: 0}, true
+			}
+		}
+		return runner.Result{}, false
+	}
+}
+
+func TestBuildWindowsRunsUpstreamCommandShape(t *testing.T) {
+	src := fixtureSource(t)
+	materialize := func() { windowsFixtureBuildOutput(t, src, "1.3.18.6") }
+	r := &runner.FakeRunner{Match: wireWindowsBuildFake(src, materialize)}
+	b := Builder{Runner: r}
+	skia := filepath.Join(t.TempDir(), "skia-m124")
+
+	out, err := b.Build(context.Background(), BuildRequest{
+		SourceDir:    src,
+		Contract:     Contract{OS: "windows", Level: contractLevel},
+		SkiaDir:      skia,
+		CPU:          "x64",
+		ExtraBinDirs: []string{`C:\cache\toolchains\cmake\official\4.1.2\bin`},
+		Env:          []string{"LIB=C:\\VS\\LIB", "INCLUDE=C:\\VS\\INCLUDE"},
+	})
+	if err != nil {
+		t.Fatalf("Build windows: %v", err)
+	}
+	wantExe := filepath.Join(src, "build", "bin", "aseprite.exe")
+	if out.Executable != wantExe {
+		t.Errorf("Executable = %q, want %q", out.Executable, wantExe)
+	}
+	if out.BinDir != filepath.Join(src, "build", "bin") {
+		t.Errorf("BinDir = %q", out.BinDir)
+	}
+	if out.DataDir != filepath.Join(src, "build", "bin", "data") {
+		t.Errorf("DataDir = %q", out.DataDir)
+	}
+	if out.AppPath != "" {
+		t.Errorf("AppPath = %q, want empty on Windows", out.AppPath)
+	}
+
+	calls := r.Called()
+	if len(calls) != 2 {
+		t.Fatalf("calls = %+v, want exactly configure+build", calls)
+	}
+	configure, build := calls[0], calls[1]
+	if configure.Name != "cmake" || configure.Args[0] != "-B" {
+		t.Errorf("configure = %+v", configure)
+	}
+	joined := strings.Join(configure.Args, " ")
+	for _, want := range []string{
+		"-G Ninja",
+		"-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+		"-DLAF_BACKEND=skia",
+		`-DSKIA_DIR=` + skia,
+		`-DSKIA_LIBRARY_DIR=` + filepath.Join(skia, "out", "Release-x64"),
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("configure args missing %q: %s", want, joined)
+		}
+	}
+	if configure.Dir != src {
+		t.Errorf("configure dir = %q", configure.Dir)
+	}
+	if build.Name != "cmake" || strings.Join(build.Args, " ") != "--build "+filepath.Join(src, "build", "bin")[:0]+filepath.Join(src, "build")+" -- aseprite" {
+		t.Errorf("build = %+v", build)
+	}
+	// The VS environment must reach the commands, with the cached-tools
+	// PATH prepended after it.
+	for _, c := range calls {
+		var hasLib, hasInclude, hasPath bool
+		for _, e := range c.Env {
+			switch {
+			case strings.HasPrefix(e, "LIB="):
+				hasLib = true
+			case strings.HasPrefix(e, "INCLUDE="):
+				hasInclude = true
+			case strings.HasPrefix(e, "PATH="):
+				hasPath = true
+			}
+		}
+		if !hasLib || !hasInclude || !hasPath {
+			t.Errorf("%s env = %v, want LIB/INCLUDE VS entries + PATH", c.Args[0], c.Env)
+		}
+	}
+}
+
+func TestBuildWindowsConfigureFailure(t *testing.T) {
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "cmake" && len(c.Args) > 0 && c.Args[0] == "-B" {
+			return runner.Result{ExitCode: 1, Stderr: "CMake Error: the generator is unknown\n"}, true
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+	_, err := b.Build(context.Background(), BuildRequest{
+		SourceDir: src,
+		Contract:  Contract{OS: "windows", Level: contractLevel},
+		SkiaDir:   filepath.Join(t.TempDir(), "skia-m124"),
+		CPU:       "x64",
+	})
+	var ube *UpstreamBuildError
+	if !errors.As(err, &ube) || ube.ExitCode != 1 || !strings.Contains(ube.Tail, "CMake Error") {
+		t.Fatalf("err = %v (%T), want UpstreamBuildError exit 1", err, err)
+	}
+	// Configure failure must not reach the build step.
+	for _, c := range r.Called() {
+		if c.Args[0] == "--build" {
+			t.Error("build step ran despite configure failure")
+		}
+	}
+}
+
+func TestBuildWindowsBuildFailure(t *testing.T) {
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "cmake" && len(c.Args) > 0 {
+			switch c.Args[0] {
+			case "-B":
+				return runner.Result{ExitCode: 0}, true
+			case "--build":
+				return runner.Result{ExitCode: 2, Stderr: "ninja: error: cl.exe failed\n"}, true
+			}
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+	_, err := b.Build(context.Background(), BuildRequest{
+		SourceDir: src,
+		Contract:  Contract{OS: "windows", Level: contractLevel},
+		SkiaDir:   filepath.Join(t.TempDir(), "skia-m124"),
+		CPU:       "x64",
+	})
+	var ube *UpstreamBuildError
+	if !errors.As(err, &ube) || ube.ExitCode != 2 {
+		t.Fatalf("err = %v, want UpstreamBuildError exit 2", err)
+	}
+}
+
+func TestBuildWindowsMissingOutputIsContractViolation(t *testing.T) {
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "cmake" && len(c.Args) > 0 {
+			// Both steps "succeed" but produce nothing.
+			return runner.Result{ExitCode: 0}, true
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+	_, err := b.Build(context.Background(), BuildRequest{
+		SourceDir: src,
+		Contract:  Contract{OS: "windows", Level: contractLevel},
+	})
+	var cve *ContractViolationError
+	if !errors.As(err, &cve) || cve.Stage != "build output" {
+		t.Fatalf("err = %v (%T), want ContractViolationError at build output", err, err)
+	}
+	if !strings.Contains(cve.Reason, "aseprite.exe") {
+		t.Errorf("Reason = %q", cve.Reason)
+	}
+}
+
+func TestBuildWindowsEmptyDataIsContractViolation(t *testing.T) {
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "cmake" && len(c.Args) > 0 && c.Args[0] == "--build" {
+			// Produce the exe but no data dir (copy_data never ran).
+			bin := filepath.Join(src, "build", "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "aseprite.exe"), []byte("PE32"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return runner.Result{ExitCode: 0}, true
+		}
+		if c.Name == "cmake" && len(c.Args) > 0 && c.Args[0] == "-B" {
+			return runner.Result{ExitCode: 0}, true
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+	_, err := b.Build(context.Background(), BuildRequest{
+		SourceDir: src,
+		Contract:  Contract{OS: "windows", Level: contractLevel},
+	})
+	var cve *ContractViolationError
+	if !errors.As(err, &cve) || !strings.Contains(cve.Reason, "data") {
+		t.Fatalf("err = %v, want the empty-data contract violation", err)
+	}
+}
+
+func TestBuildUnixStillRunsBashScript(t *testing.T) {
+	// The darwin path is unchanged: one bash invocation seeds upstream
+	// config and materializes the bundle.
+	src := fixtureSource(t)
+	r := &runner.FakeRunner{Match: func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "bash" && len(c.Args) == 3 && strings.HasSuffix(c.Args[0], "build.sh") {
+			fakeBuildOutput(t, src, "1.3.18.6")
+			return runner.Result{ExitCode: 0}, true
+		}
+		return runner.Result{}, false
+	}}
+	b := Builder{Runner: r}
+	out, err := b.Build(context.Background(), BuildRequest{
+		SourceDir: src,
+		Contract:  Contract{OS: "darwin", Level: contractLevel, BuildScript: filepath.Join(src, "build.sh"), SkiaDirName: "skia-m124"},
+		SkiaDir:   filepath.Join(t.TempDir(), "skia-m124"),
+		CPU:       "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Build darwin: %v", err)
+	}
+	if out.AppPath == "" {
+		t.Errorf("AppPath = %q, want the bundle", out.AppPath)
+	}
+	if out.BinDir == "" {
+		t.Error("BinDir must be populated for bundle builds too")
+	}
+}
+
 // anyVersionFaker answers --version for the fixture's fake executable
 // with a plausible Aseprite version banner.
 func anyVersionFaker() func(runner.Command) (runner.Result, bool) {

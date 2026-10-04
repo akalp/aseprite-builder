@@ -10,8 +10,12 @@ import (
 	"github.com/akalp/aseprite-builder/internal/runner"
 )
 
-// newDarwinPlatform builds the macOS Platform implementation. The
-// Apple system-managed toolchain is detected, not installed.
+// This file registers the darwin selector when GOOS=darwin (see
+// selector.go). The Apple system-managed toolchain is detected, not
+// installed.
+func init() { registerSelector("darwin", newDarwinPlatform) }
+
+// newDarwinPlatform builds the macOS Platform implementation.
 func newDarwinPlatform(builderVersion string) (platform.Platform, error) {
 	r := runner.NewConcreteRunner()
 	p, err := darwin.New(r, builderVersion)

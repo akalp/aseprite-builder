@@ -29,15 +29,24 @@ type BuildRequest struct {
 	// (from the builder's cache) to prepend to PATH. System tools need
 	// no entry: they are already reachable through PATH.
 	ExtraBinDirs []string
+	// Env carries explicit environment overrides for the build
+	// (KEY=value), such as the Visual Studio environment captured from
+	// vcvars64.bat on Windows. Empty outside platforms that need it.
+	Env []string
 }
 
-// BuildOutput is the produced macOS artifact.
+// BuildOutput is the produced artifact.
 type BuildOutput struct {
-	// AppPath is the produced Aseprite.app bundle.
+	// AppPath is the produced Aseprite.app bundle (macOS only).
 	AppPath string
-	// Executable is the bundle's Mach-O executable.
+	// Executable is the produced executable. On macOS it is the
+	// bundle's Mach-O executable; on Windows the plain aseprite.exe.
 	Executable string
-	// DataDir is the bundle's runtime data directory.
+	// BinDir is the directory holding the executable plus everything
+	// needed to run it (the data dir, DLLs). It is the payload the
+	// non-bundle platform installers activate.
+	BinDir string
+	// DataDir is the runtime data directory.
 	DataDir string
 	// BuildDir is the directory the upstream build wrote into.
 	BuildDir string
@@ -48,21 +57,14 @@ type BuildOutput struct {
 }
 
 // Builder orchestrates the upstream build flow. It does not reimplement
-// Aseprite's build logic; it prepares the environment upstream's
-// build.sh expects (its own config files, Skia location, tool PATH) and
-// invokes it.
+// Aseprite's build logic; it prepares the environment and invokes the
+// upstream flow for the recognized contract platform:
 //
-// The expected upstream invocation contract (verified at build time):
-//
-//	bash build.sh --auto --norun
-//
-// in --auto mode upstream:
-//   - validates submodules of the extracted source,
-//   - reads laf/misc/skia-tag.txt and reuses an existing Skia dir
-//     (or downloads the official prebuilt package itself),
-//   - configures cmake with the Ninja generator,
-//   - runs cmake --build ... -- aseprite,
-//   - writes the bundle to <source>/build/bin/Aseprite.app.
+//   - macOS/Linux: runs upstream's build.sh --auto (its own config
+//     files, Skia location, tool PATH prepared), which configures
+//     cmake and builds into <source>/build/bin/Aseprite.app.
+//   - Windows: runs the two cmake commands build.sh itself runs, under
+//     a Visual Studio environment the platform supplies.
 type Builder struct {
 	// Runner, when set, is used directly (tests inject fakes here).
 	Runner runner.Runner
@@ -94,18 +96,52 @@ type CommandLogger interface {
 //	               detects the branch differently.
 var buildConfigNames = []string{"_skia_dir", "main_skia_dir", "beta_skia_dir"}
 
-// Build runs the upstream build flow and returns the produced artifact.
+// Build runs the upstream build flow and returns the produced
+// artifact.
+//
+// The flow is per-contract-platform: macOS/Linux orchestrate upstream's
+// own build.sh (contract-faithful: bash is guaranteed there), while
+// Windows drives the documented upstream contract directly — the two
+// cmake commands build.sh itself runs — inside a Visual Studio
+// environment the platform provides. Both paths feed the same logging,
+// progress reporting and output verification below.
 func (b Builder) Build(ctx context.Context, req BuildRequest) (BuildOutput, error) {
-	if err := b.seedUpstreamConfig(req); err != nil {
+	var err error
+	switch req.Contract.OS {
+	case "windows":
+		err = b.buildWindows(ctx, req)
+	default:
+		err = b.buildUnix(ctx, req)
+	}
+	if err != nil {
 		return BuildOutput{}, err
 	}
+	return locateBuildOutput(req)
+}
 
-	env := buildEnv(req.ExtraBinDirs)
+// buildUnix orchestrates upstream's own build.sh (macOS/Linux).
+//
+// The expected upstream invocation contract (verified at build time):
+//
+//	bash build.sh --auto --norun
+//
+// in --auto mode upstream:
+//   - validates submodules of the extracted source,
+//   - reads laf/misc/skia-tag.txt and reuses an existing Skia dir
+//     (or downloads the official prebuilt package itself),
+//   - configures cmake with the Ninja generator,
+//   - runs cmake --build ... -- aseprite,
+//   - writes the bundle to <source>/build/bin/Aseprite.app (macOS).
+func (b Builder) buildUnix(ctx context.Context, req BuildRequest) error {
+	if err := b.seedUpstreamConfig(req); err != nil {
+		return err
+	}
+
 	cmd := runner.Command{
 		Name: "bash",
 		Args: []string{req.Contract.BuildScript, "--auto", "--norun"},
 		Dir:  req.SourceDir,
-		Env:  env,
+		Env:  buildEnv(req.ExtraBinDirs),
 		// Upstream build.sh asks for a build selection when its own
 		// state directory already lists builds (e.g. a prior install
 		// attempt left <source>/build with a CMakeCache). Our workdirs
@@ -118,38 +154,19 @@ func (b Builder) Build(ctx context.Context, req BuildRequest) (BuildOutput, erro
 		b.Log.Command(cmd.Name, cmd.Args, cmd.Env, cmd.Dir)
 	}
 
-	if b.Progress != nil {
-		// Announce the configure phase immediately: everything the
-		// upstream script does before ninja reports counters is
-		// configuration from the user's point of view.
-		b.Progress(BuildProgress{Phase: BuildPhaseConfigure})
-	}
-	res, err := b.runnerFor().Run(ctx, cmd)
-	if err != nil {
-		// Context cancellation and start failures.
-		return BuildOutput{}, fmt.Errorf("upstream build failed: %w", err)
-	}
-	if b.Log != nil {
-		b.Log.CommandResult("build.sh", res.ExitCode, res.Stdout, res.Stderr, res.Duration)
-	}
-	if !res.OK() {
-		return BuildOutput{}, &UpstreamBuildError{
-			ExitCode: res.ExitCode,
-			Tail:     tail(res.Combined(), 64),
-		}
-	}
-
-	out, err := locateBuildOutput(req)
-	if err != nil {
-		return BuildOutput{}, err
-	}
-	return out, nil
+	// Announce the configure phase immediately: everything the
+	// upstream script does before ninja reports counters is
+	// configuration from the user's point of view.
+	b.announceConfigure()
+	res, err := b.buildRunner().Run(ctx, cmd)
+	b.logCommandResult("build.sh", res)
+	return requireOK(res, err)
 }
 
-// runnerFor constructs the actual Runner for the build invocation.
+// buildRunner constructs the runner for one build invocation.
 // Injected Runner wins (tests); otherwise a concrete runner streams
 // output and feeds the progress tracker simultaneously.
-func (b Builder) runnerFor() runner.Runner {
+func (b Builder) buildRunner() runner.Runner {
 	if b.Runner != nil {
 		return b.Runner
 	}
@@ -161,6 +178,44 @@ func (b Builder) runnerFor() runner.Runner {
 		return runner.ConcreteRunner{Stream: stream}
 	}
 	return runner.ConcreteRunner{Stream: io.MultiWriter(stream, newProgressTracker(b.Progress))}
+}
+
+// logCommand records a command invocation when a logger is wired.
+func (b Builder) logCommand(cmd runner.Command) {
+	if b.Log != nil {
+		b.Log.Command(cmd.Name, cmd.Args, cmd.Env, cmd.Dir)
+	}
+}
+
+// logCommandResult records a command outcome when a logger is wired.
+func (b Builder) logCommandResult(name string, res runner.Result) {
+	if b.Log != nil {
+		b.Log.CommandResult(name, res.ExitCode, res.Stdout, res.Stderr, res.Duration)
+	}
+}
+
+// announceConfigure emits the configure-phase progress tick: everything
+// the upstream flow does before ninja reports counters is
+// configuration from the user's point of view.
+func (b Builder) announceConfigure() {
+	if b.Progress != nil {
+		b.Progress(BuildProgress{Phase: BuildPhaseConfigure})
+	}
+}
+
+// requireOK turns a failed step into the typed upstream build error.
+func requireOK(res runner.Result, err error) error {
+	if err != nil {
+		// Context cancellation and start failures.
+		return fmt.Errorf("upstream build failed: %w", err)
+	}
+	if res.OK() {
+		return nil
+	}
+	return &UpstreamBuildError{
+		ExitCode: res.ExitCode,
+		Tail:     tail(res.Combined(), 64),
+	}
 }
 
 // UpstreamBuildError wraps a non-zero exit from the upstream build with
@@ -203,7 +258,12 @@ func (b Builder) seedUpstreamConfig(req BuildRequest) error {
 		}
 		// Additionally seed the default .deps location upstream checks,
 		// so the resolved Skia is used even when the config-file naming
-		// above no longer matches a future build.sh.
+		// above no longer matches a future build.sh. A contract without
+		// a Skia dir name cannot name the link (inspection always
+		// produces one; this guards hand-built requests).
+		if req.Contract.SkiaDirName == "" {
+			return fmt.Errorf("contract is missing the Skia dir name; cannot seed the upstream Skia location")
+		}
 		depsDir := filepath.Join(req.SourceDir, ".deps")
 		link := filepath.Join(depsDir, req.Contract.SkiaDirName)
 		if err := os.MkdirAll(depsDir, 0o755); err != nil {
@@ -248,10 +308,48 @@ func buildEnv(extraBinDirs []string) []string {
 	return []string{"PATH=" + prefix}
 }
 
-// locateBuildOutput finds the produced macOS application bundle at the
-// path the upstream contract defines.
+// locateBuildOutput finds the artifact at the path the recognized
+// contract defines. On macOS it is the application bundle; on Windows
+// the plain executable plus the data directory next to it.
 func locateBuildOutput(req BuildRequest) (BuildOutput, error) {
 	binDir := filepath.Join(req.SourceDir, "build", "bin")
+	switch req.Contract.OS {
+	case "windows":
+		return locateWindowsBuildOutput(req, binDir)
+	default:
+		return locateAppBundleOutput(req, binDir)
+	}
+}
+
+// locateWindowsBuildOutput validates the Windows exe + bin/data
+// output contract.
+func locateWindowsBuildOutput(req BuildRequest, binDir string) (BuildOutput, error) {
+	violation := func(reason string) (BuildOutput, error) {
+		return BuildOutput{}, &ContractViolationError{Stage: "build output", Reason: reason}
+	}
+	exe := filepath.Join(binDir, windowsExeName)
+	fi, err := os.Stat(exe)
+	if err != nil || fi.IsDir() {
+		return violation(fmt.Sprintf(
+			"the upstream build did not produce %s (the Windows output contract this builder relies on)", exe))
+	}
+	data := filepath.Join(binDir, "data")
+	if runtimeDataEmpty(data) {
+		return violation(fmt.Sprintf(
+			"the built data directory %s is empty; the upstream data copy step did not run", data))
+	}
+	return BuildOutput{
+		AppPath:    "", // no bundle on Windows
+		Executable: exe,
+		BinDir:     binDir,
+		DataDir:    data,
+		BuildDir:   filepath.Join(req.SourceDir, "build"),
+		IconsDir:   sourceIconsDir(req.SourceDir),
+	}, nil
+}
+
+// locateAppBundleOutput validates the macOS bundle output contract.
+func locateAppBundleOutput(req BuildRequest, binDir string) (BuildOutput, error) {
 	app := filepath.Join(binDir, "Aseprite.app")
 	if fi, err := os.Stat(app); err != nil || !fi.IsDir() {
 		return BuildOutput{}, &ContractViolationError{
@@ -271,6 +369,7 @@ func locateBuildOutput(req BuildRequest) (BuildOutput, error) {
 	return BuildOutput{
 		AppPath:    app,
 		Executable: executable,
+		BinDir:     binDir,
 		DataDir:    filepath.Join(app, "Contents", "Resources", "data"),
 		BuildDir:   filepath.Join(req.SourceDir, "build"),
 		IconsDir:   sourceIconsDir(req.SourceDir),

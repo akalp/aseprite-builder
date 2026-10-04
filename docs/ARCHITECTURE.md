@@ -72,10 +72,11 @@ of aseprite-builder itself. Everything is resolved per-build:
 | Requirement      | Discovery                                      | Reuse order                                     | Authoritative source |
 |------------------|------------------------------------------------|--------------------------------------------------|----------------------|
 | Aseprite source  | GitHub releases metadata (`internal/aseprite`) | already-extracted source tree for that version   | `github.com/aseprite/aseprite` stable release assets (`Aseprite-vX-Source.zip`), digest-verified when GitHub publishes one |
-| CMake            | min version parsed from the source's `CMakeLists.txt` | system `cmake` → cached dist → download | `github.com/Kitware/CMake` macOS universal tarball |
-| Ninja            | presence of any working version                | system `ninja` → cached dist → download          | `github.com/ninja-build/ninja` `ninja-mac.zip` |
-| Skia             | `laf/misc/skia-tag.txt` + `skia-url.sh` *executed from the extracted source* | cached verified extraction | the exact URL the upstream script produced |
+| CMake            | min version parsed from the source's `CMakeLists.txt` | system `cmake` → cached dist → download | `github.com/Kitware/CMake` macOS universal tarball / Windows x86_64 zip (per host) |
+| Ninja            | presence of any working version                | system `ninja` → cached dist → download          | `github.com/ninja-build/ninja` `ninja-win.zip` (Windows) / `ninja-mac.zip` (macOS) |
+| Skia             | `laf/misc/skia-tag.txt` + `skia-url.sh` *executed from the extracted source* (bash) — or, on Windows where bash is absent, *parsed* from the script's own URL/asset templates and validated against the aseprite/skia asset list | cached verified extraction | the exact URL upstream's script resolves/encodes (`Skia-<OS>-Release-<cpu>.zip`) |
 | Xcode/SDK/clang  | probe commands (`internal/platform/darwin`)     | system-managed only — never installed by us      | Apple (not downloaded) |
+| Visual Studio / Build Tools / MSVC environment / Windows SDK | `vswhere.exe` (upstream build.cmd's discovery: `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` → `VC\Auxiliary\Build\vcvars64.bat`) + Windows Kits include probe; `vcvars64.bat && set` captures the build environment | system-managed only — never installed by us | Microsoft (not downloaded) |
 
 Downloads are verified against upstream digests when they exist
 (Aseprite source: yes, via GitHub asset digests; aseprite/skia assets
@@ -86,18 +87,36 @@ never next to the binary and never globally installed.
 ## The upstream build contract
 
 `internal/aseprite/contract.go` inspects the extracted source tree and
-only proceeds when every marker of the *known contract* is present
-(entry points `build.sh`, Skia machinery under `laf/misc/`, the
-`project(aseprite)` CMake declaration, the macOS bundle output rule in
-`src/CMakeLists.txt`, and the complete-submodule signals upstream's own
-CMake checks for). Unknown or mutated contracts fail before anything is
-built — `aseprite.UnknownContractError`.
+only proceeds when every marker of the *known contract* is present.
+Per platform:
+
+- **macOS** — entry point `build.sh`, Skia machinery under `laf/misc/`,
+  the `project(aseprite)` CMake declaration, the Aseprite.app output
+  rule in `src/CMakeLists.txt`, and the complete-submodule signals
+  upstream's own CMake checks for.
+- **Windows** — the same structural markers plus upstream's Windows
+  entry points (`build.cmd`, `build.ps1`) and the direct exe + `bin/data`
+  output rules in `src/CMakeLists.txt`. Contracts carry an OS token in
+  their fingerprint so state can tell platforms/generations apart.
+
+Unknown or mutated contracts fail before anything is built —
+`aseprite.UnknownContractError`.
 
 The build itself is *orchestrated, not reimplemented*:
-`aseprite.Builder` prepares upstream's own `build.sh --auto` config
-files (`<source>/.build/userkind`, `builds_dir`, `*_skia_dir`), links
-the resolved Skia into the location upstream looks at, prepends
-resolved tool PATH entries, and runs `bash build.sh --auto --norun`.
+
+- **macOS/Linux**: `aseprite.Builder` prepares upstream's own
+  `build.sh --auto` config files (`<source>/.build/userkind`,
+  `builds_dir`, `*_skia_dir`), links the resolved Skia into the location
+  upstream looks at, prepends resolved tool PATH entries, and runs
+  `bash build.sh --auto --norun`.
+- **Windows** (no bash on stock Windows — spec §9): the builder runs
+  the *same two cmake commands* build.sh runs for users
+  (`cmake -B <src>/build -S <src> -G Ninja -DLAF_BACKEND=skia
+  -DSKIA_DIR=… -DSKIA_LIBRARY_DIR=…`, then
+  `cmake --build <src>/build -- aseprite`) inside the Visual Studio
+  environment the platform captured from `vcvars64.bat`
+  (`internal/aseprite/windowsbuild.go`). No Git Bash dependency.
+
 If output locations shift upstream, the builder detects the mismatch
 (`ContractViolationError`) instead of guessing.
 
@@ -113,15 +132,26 @@ builder's ownership marker is never replaced unless the user passes
 `--force` (this also applies when the user installed an official
 Aseprite there). The previous version is retained for one generation.
 
+`internal/platform/windows` mirrors this with a directory layout:
+the build's `bin` payload is staged under
+`%LOCALAPPDATA%\Programs\.aseprite-builder\staging\Aseprite`, verified
+(`aseprite.exe --version`), the current directory is retained in
+`…\previous\`, and the staged directory is renamed into
+`%LOCALAPPDATA%\Programs\Aseprite`. The ownership marker lives next to
+the executable; a Start-Menu `.lnk` (minimal stdlib Shell Link writer)
+is created on install and removed on uninstall. No elevation, no
+registry entries.
+
 ## State and logs
 
 - `~/Library/Caches/aseprite-builder/` — downloads, extracted sources,
   toolchains, Skia, logs (per-operation files with full command
-  records).
+  records). Windows: `%LOCALAPPDATA%\aseprite-builder\…`.
 - `~/Library/Application Support/aseprite-builder/` — `config.json`,
   `install.json` (the install record: version, tag, source URL,
   digest, Skia tag, contract fingerprint, install path, retained
-  previous path, workspace path).
+  previous path, workspace path). Windows: `%LOCALAPPDATA%\
+  aseprite-builder\…`.
 
 Log redaction is enforced in `internal/logging`: environment keys
 matching credential-shaped names are recorded as `(redacted)`, and raw

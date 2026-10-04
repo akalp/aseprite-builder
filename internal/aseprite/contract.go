@@ -18,7 +18,14 @@ import (
 // 1 = build.sh orchestrator + skia-url.sh Skia resolution + Aseprite.app
 //
 //	output bundle on macOS.
-const contractLevel = 1
+//
+// 2 = platform-level contract semantics: the same upstream tree shape
+//
+//	as level 1, but the recognized contract is now distinguished per
+//	platform (macOS bundle flow vs. Windows direct-CMake flow) and
+//	fingerprints carry the OS so install state can tell generations
+//	and platforms apart.
+const contractLevel = 2
 
 // Contract summarizes the upstream build contract discovered by
 // inspecting an extracted Aseprite source tree. Every value is derived
@@ -35,10 +42,17 @@ type Contract struct {
 	SkiaDirName string
 	// BundleOutput is the relative path, inside the build directory,
 	// where upstream's macOS build produces the application bundle.
-	// Derived from src/CMakeLists.txt's data-output contract.
+	// Derived from src/CMakeLists.txt's data-output contract. Empty on
+	// platforms without a bundle output (exe-only layouts).
 	BundleOutput string
-	// BuildScript is the absolute path of the upstream entry point.
+	// BuildScript is the absolute path of the upstream entry point
+	// (build.sh on macOS/Linux; build.cmd/build.ps1 markers are
+	// validated separately for the Windows flow).
 	BuildScript string
+	// OS names the platform this contract shape supports ("darwin" or
+	// "windows"); recorded so state fingerprints cannot be confused
+	// across platforms.
+	OS string
 	// Level is the builder-side contract level recognized here.
 	Level int
 }
@@ -64,6 +78,15 @@ var (
 	cmakeMinVersionRe = regexp.MustCompile(`(?m)^\s*cmake_minimum_required\s*\(\s*VERSION\s+([0-9.]+)`)
 	projectNameRe     = regexp.MustCompile(`(?m)^\s*project\s*\(\s*aseprite\b`)
 	bundleOutputRe    = regexp.MustCompile(`bin/Aseprite\.app`)
+	// windowsExeOutputRe matches the src/CMakeLists.txt exe output
+	// contract: add_executable(aseprite ...) guarded with INSTALL_OPT
+	// RUNTIME (the non-bundle branch). Visible only in the non-bundle
+	// layout, i.e. exactly the Windows shape this builder drives.
+	windowsExeOutputRe = regexp.MustCompile(`(?m)^\s*add_executable\s*\(\s*aseprite\b`)
+	// windowsDataOutputRe matches the non-bundle data output dir
+	// contract (`bin/data`); see ORIGINAL_DATA_OUTPUT_DIR / the
+	// copy_data custom target in src/CMakeLists.txt.
+	windowsDataOutputRe = regexp.MustCompile(`bin/data`)
 )
 
 // requiredFiles are structural markers from the upstream tree. The
@@ -88,11 +111,31 @@ var darwinRequiredFiles = []string{
 	"src/main/osx/Info.plist",
 }
 
+// windowsRequiredFiles are the upstream Windows entry-point markers.
+// They exist in every official release today; their absence or removal
+// means the Windows build flow changed shape and must not be guessed.
+var windowsRequiredFiles = []string{
+	"build.cmd",
+	"build.ps1",
+}
+
+// ExeOutputConfig selects which output the build is expected to
+// produce.
+type ExeOutputConfig int
+
+const (
+	// ExeOutputAppBundle is the macOS .app bundle contract.
+	ExeOutputAppBundle ExeOutputConfig = iota + 1
+	// ExeOutputWindows is the plain Windows exe + bin/data contract.
+	ExeOutputWindows
+)
+
 // Inspect validates the source tree and derives the build contract.
 //
-// Failing inspection is always safe: nothing has been built or
-// installed yet.
-func (Inspector) Inspect(sourceDir string, wantsAppBundle bool) (Contract, error) {
+// output describes which platform's output contract the caller wants
+// recognized. Failing inspection is always safe: nothing has been
+// built or installed yet.
+func (Inspector) Inspect(sourceDir string, output ExeOutputConfig) (Contract, error) {
 	var reasons []string
 
 	// Incomplete-source check: mirror upstream CMakeLists.txt logic —
@@ -105,11 +148,16 @@ func (Inspector) Inspect(sourceDir string, wantsAppBundle bool) (Contract, error
 		}
 		reasons = append(reasons, fmt.Sprintf("missing %s (incomplete source archive?)", f))
 	}
-	if wantsAppBundle {
-		for _, f := range darwinRequiredFiles {
-			if !wantsSourceFile(sourceDir, f) {
-				reasons = append(reasons, fmt.Sprintf("missing %s", f))
-			}
+	var extra []string
+	switch output {
+	case ExeOutputAppBundle:
+		extra = darwinRequiredFiles
+	case ExeOutputWindows:
+		extra = windowsRequiredFiles
+	}
+	for _, f := range extra {
+		if !wantsSourceFile(sourceDir, f) {
+			reasons = append(reasons, fmt.Sprintf("missing %s", f))
 		}
 	}
 	if len(reasons) > 0 {
@@ -142,9 +190,10 @@ func (Inspector) Inspect(sourceDir string, wantsAppBundle bool) (Contract, error
 		}}
 	}
 
-	// On macOS, verify the bundle output contract exists in the
-	// upstream build rules.
-	if wantsAppBundle {
+	// Verify the output contract exists in the upstream build rules:
+	// the macOS bundle rule, or the Windows exe + bin/data rules.
+	switch output {
+	case ExeOutputAppBundle:
 		srcCmake, err := os.ReadFile(filepath.Join(sourceDir, "src", "CMakeLists.txt")) //nolint:gosec // path from trusted app logic
 		if err != nil {
 			return Contract{}, UnknownContractError{Reasons: []string{
@@ -157,7 +206,20 @@ func (Inspector) Inspect(sourceDir string, wantsAppBundle bool) (Contract, error
 			}}
 		}
 		contract.BundleOutput = filepath.Join("build", "bin", "Aseprite.app")
+	case ExeOutputWindows:
+		srcCmake, err := os.ReadFile(filepath.Join(sourceDir, "src", "CMakeLists.txt")) //nolint:gosec // path from trusted app logic
+		if err != nil {
+			return Contract{}, UnknownContractError{Reasons: []string{
+				"cannot read src/CMakeLists.txt: " + err.Error(),
+			}}
+		}
+		if !windowsExeOutputRe.Match(srcCmake) || !windowsDataOutputRe.Match(srcCmake) {
+			return Contract{}, UnknownContractError{Reasons: []string{
+				"src/CMakeLists.txt no longer describes the Windows exe + bin/data output contract",
+			}}
+		}
 	}
+	contract.OS = output.OS()
 
 	// Discover the Skia requirement.
 	tag, err := discoverSkiaTag(sourceDir)
@@ -168,6 +230,19 @@ func (Inspector) Inspect(sourceDir string, wantsAppBundle bool) (Contract, error
 	contract.SkiaDirName = skiaDirNameFromTag(tag)
 
 	return contract, nil
+}
+
+// OS returns the canonical builder OS name the output config belongs
+// to.
+func (c ExeOutputConfig) OS() string {
+	switch c {
+	case ExeOutputAppBundle:
+		return "darwin"
+	case ExeOutputWindows:
+		return "windows"
+	default:
+		return ""
+	}
 }
 
 // discoverSkiaTag reads the upstream-required Skia revision from
@@ -211,6 +286,7 @@ func wantsSourceFile(sourceDir, rel string) bool {
 func (c Contract) ContractFingerprint() string {
 	parts := []string{
 		fmt.Sprintf("level=%d", c.Level),
+		"os=" + c.OS,
 		"cmake-min=" + c.CMakeMinVersion.String(),
 		"skia=" + c.SkiaTag,
 	}

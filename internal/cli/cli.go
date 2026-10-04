@@ -257,7 +257,7 @@ func (c *CLI) cmdInstall(ctx context.Context, args []string) int {
 	}
 
 	fmt.Fprintf(c.Stderr, "\n✅ Aseprite %s installed: %s\n", result.Version, result.AppPath)
-	fmt.Fprintf(c.Stderr, "   Launch it from Spotlight, or run: aseprite-builder launch\n")
+	fmt.Fprintf(c.Stderr, "   Launch it with: aseprite-builder launch\n")
 	return 0
 }
 

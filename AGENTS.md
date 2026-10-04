@@ -4,8 +4,9 @@ Go 1.24 CLI (module `github.com/akalp/aseprite-builder`) that builds,
 installs, updates and removes Aseprite from official source. Business and data
 layers are stdlib-only; UI dependencies (Bubble Tea / Lip Gloss) are allowed
 **only** inside `internal/tui` (spec §10, §36 — go.mod/go.sum are tracked
-normally). First vertical slice is macOS arm64/amd64 only (other platforms fail
-fast in `internal/cli`); running with no arguments opens the TUI. Docs:
+normally). Supported platforms today: macOS arm64/amd64 and Windows 11 x64
+(`internal/platform/{darwin,windows}`; running with no arguments opens the
+TUI). Linux is the next milestone. Docs:
 `docs/PROJECT_SPEC.md` (the spec — treat as binding), `docs/ARCHITECTURE.md`,
 `docs/DEVELOPMENT.md`.
 
@@ -55,6 +56,7 @@ fast in `internal/cli`); running with no arguments opens the TUI. Docs:
 
 When the upstream *build contract* changes (not merely versions): adjust the
 markers in `internal/aseprite/contract.go`, the orchestration in
-`internal/aseprite/build.go`, and bump the `contractLevel` const so install
+`internal/aseprite/build.go` (+ `internal/aseprite/windowsbuild.go` for the
+direct-CMake Windows flow), and bump the `contractLevel` const so install
 state can tell generations apart. Unknown/mutated contracts must fail safely
 (`UnknownContractError`), never be guessed.

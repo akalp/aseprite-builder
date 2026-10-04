@@ -318,7 +318,7 @@ func resultSummary(kind opKind, r app.InstallResult, purge []app.PurgeResult) []
 	switch kind {
 	case opInstall:
 		out = append(out, fmt.Sprintf("✅ Aseprite %s installed: %s", r.Version, r.AppPath))
-		out = append(out, "   Launch it from Spotlight, or run: aseprite-builder launch")
+		out = append(out, "   Launch it with: aseprite-builder launch")
 	case opUpdate:
 		out = append(out, fmt.Sprintf("✅ Updated to Aseprite %s: %s", r.Version, r.AppPath))
 	case opRebuild:

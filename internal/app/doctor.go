@@ -60,13 +60,21 @@ func (s *Service) Doctor(ctx context.Context) (DoctorReport, error) {
 	}
 	report.Requirements = checks
 
-	// Tool resolution (no downloads performed here)
+	// Tool resolution (no downloads performed here). The fetcher
+	// selection mirrors the install flow: Windows resolves Windows
+	// distributions.
+	var cmakeFetcher dependencies.Fetcher = dependencies.CMakeFetcher{Layout: s.opts.Layout}
+	var ninjaFetcher dependencies.Fetcher = dependencies.NinjaFetcher{Layout: s.opts.Layout}
+	if report.System.OS == "windows" {
+		cmakeFetcher = dependencies.NewWindowsCMakeFetcher(s.opts.Layout, nil)
+		ninjaFetcher = dependencies.NewWindowsNinjaFetcher(s.opts.Layout, nil)
+	}
 	resolver := &dependencies.Resolver{
 		Runner: s.opts.Runner,
 		Layout: s.opts.Layout,
 		Fetchers: map[string]dependencies.Fetcher{
-			"cmake": dependencies.CMakeFetcher{Layout: s.opts.Layout},
-			"ninja": dependencies.NinjaFetcher{Layout: s.opts.Layout},
+			"cmake": cmakeFetcher,
+			"ninja": ninjaFetcher,
 		},
 		MinVersions: map[string]version.Version{
 			"cmake": minCForDoctor(),

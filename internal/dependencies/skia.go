@@ -146,7 +146,7 @@ func (m SkiaManager) Ensure(ctx context.Context, req SkiaRequest) (SkiaResult, e
 	}
 	if m.Log != nil && !verifiedAvailable {
 		m.Log("Skia downloaded without an authoritative digest (upstream publishes none); " +
-			"installed from the URL produced by the source tree's own skia-url.sh")
+			"installed from the URL derived from the source tree's own Skia resolution")
 	}
 	return SkiaResult{Dir: dir, Reused: false, Verified: verifiedAvailable}, nil
 }
@@ -246,11 +246,15 @@ func isExecutableSkiaLayout(dir, cpu string) bool {
 	if !skiaHasLayout(dir, cpu) {
 		return false
 	}
-	// libskia.a must exist (macOS/Linux naming). Windows uses skia.lib,
-	// handled by the windows slice later.
-	lib := filepath.Join(dir, "out", "Release-"+cpu, "libskia.a")
-	fi, err := os.Stat(lib)
-	return err == nil && !fi.IsDir() && fi.Size() > 0
+	// The Skia library must exist. Naming: libskia.a (macOS/Linux) or
+	// skia.lib (Windows, per the upstream Skia-Windows packages).
+	for _, lib := range []string{"libskia.a", "skia.lib"} {
+		candidate := filepath.Join(dir, "out", "Release-"+cpu, lib)
+		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func metadataMatches(dir string, req SkiaRequest) bool {

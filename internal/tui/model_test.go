@@ -245,7 +245,7 @@ func stagedEvents() []app.ProgressEvent {
 		{Stage: app.StageBuild, Message: app.BuildPhaseCompile, Current: 25, Total: 100},
 		{Stage: app.StageBuild, Message: app.BuildPhaseCompile, Current: 63, Total: 100},
 		{Stage: app.StageVerify, Message: "Verifying"},
-		{Stage: app.StageInstall, Message: "Installing Aseprite.app"},
+		{Stage: app.StageInstall, Message: "Installing Aseprite"},
 	}
 }
 

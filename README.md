@@ -12,9 +12,16 @@ directories.
 
 ## Current status
 
-The project is at the first vertical slice plus its interactive UI:
+The project is at the first vertical slice plus its interactive UI,
+now spanning two platforms:
 
 - **macOS Apple Silicon + Intel** (arm64/amd64), CLI **and TUI**.
+- **Windows 11 x64** (amd64): Microsoft toolchain detected
+  (vswhere/vcvars64), Aseprite compiled directly with CMake + Ninja
+  (no bash, no Git Bash), user-local install to
+  `%LOCALAPPDATA%\Programs\Aseprite`, Start-Menu shortcut, same
+  transactional updating/uninstall semantics. CLI end-to-end; the TUI
+  inherits the same services.
 - **Running `aseprite-builder` with no arguments opens the interactive
   TUI** (install / launch / update / repair / rebuild / diagnostics /
   settings / uninstall — same services as the CLI, structured progress,
@@ -30,8 +37,8 @@ The project is at the first vertical slice plus its interactive UI:
   touches an existing working installation; the previous version is
   retained for one generation.
 
-Windows and Linux support are the next milestones (see
-`docs/PROJECT_SPEC.md` §42 and `docs/plans/`).
+Linux support is the next milestone (see `docs/PROJECT_SPEC.md` §42 and
+`docs/plans/`).
 
 ## Quick start (macOS)
 

@@ -24,9 +24,19 @@ func fixtureSource(t *testing.T, opts ...func(files map[string]string)) string {
 		"laf/clip/CMakeLists.txt": "# clip",
 		"laf/misc/platform.sh":    "# platform detection",
 		"laf/misc/skia-tag.txt":   "m124-08a5439a6b\n",
-		"laf/misc/skia-url.sh":    "# skia url resolver",
+		"laf/misc/skia-url.sh": "#!/usr/bin/env bash\n" +
+			"if [ $is_win ] ; then\n" +
+			"    skia_file=Skia-Windows-$skia_build-$cpu.zip\n" +
+			"elif [ $is_macos ] ; then\n" +
+			"    skia_file=Skia-macOS-$skia_build-$cpu.zip\n" +
+			"else\n" +
+			"    skia_file=Skia-Linux-$skia_build-$cpu.zip\n" +
+			"fi\n" +
+			"echo https://github.com/aseprite/skia/releases/download/$skia_tag/$skia_file\n",
 		"src/main/osx/Info.plist": "<plist>",
 		"src/CMakeLists.txt":      "# output contract\n# ${CMAKE_BINARY_DIR}/bin/Aseprite.app/Contents/Resources/data\n",
+		"build.cmd":               "@echo off\r\nrem upstream windows entry point\r\n",
+		"build.ps1":               "# upstream windows wrapper\r\n",
 	}
 	for _, fn := range opts {
 		fn(files)
@@ -46,7 +56,7 @@ func fixtureSource(t *testing.T, opts ...func(files map[string]string)) string {
 
 func TestInspectRecognizesContract(t *testing.T) {
 	src := fixtureSource(t)
-	c, err := NewInspector().Inspect(src, true)
+	c, err := NewInspector().Inspect(src, ExeOutputAppBundle)
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
@@ -62,11 +72,17 @@ func TestInspectRecognizesContract(t *testing.T) {
 	if c.BundleOutput == "" {
 		t.Error("BundleOutput should be set for the macOS contract")
 	}
-	if c.Level != 1 {
-		t.Errorf("Level = %d, want 1", c.Level)
+	if c.Level != 2 {
+		t.Errorf("Level = %d, want 2", c.Level)
+	}
+	if c.OS != "darwin" {
+		t.Errorf("OS = %q, want darwin", c.OS)
 	}
 	if !strings.Contains(c.ContractFingerprint(), "cmake-min=3.20") {
 		t.Errorf("fingerprint = %q", c.ContractFingerprint())
+	}
+	if !strings.Contains(c.ContractFingerprint(), "os=darwin") {
+		t.Errorf("fingerprint = %q, want the os token", c.ContractFingerprint())
 	}
 }
 
@@ -74,7 +90,7 @@ func TestInspectMissingSkiaTag(t *testing.T) {
 	src := fixtureSource(t, func(files map[string]string) {
 		delete(files, "laf/misc/skia-tag.txt")
 	})
-	_, err := NewInspector().Inspect(src, true)
+	_, err := NewInspector().Inspect(src, ExeOutputAppBundle)
 	var unknown UnknownContractError
 	if err == nil {
 		t.Fatal("missing skia-tag.txt must be an unknown contract")
@@ -91,19 +107,21 @@ func TestInspectIncompleteSource(t *testing.T) {
 	src := fixtureSource(t, func(files map[string]string) {
 		delete(files, "laf/CMakeLists.txt")
 	})
-	_, err := NewInspector().Inspect(src, true)
+	_, err := NewInspector().Inspect(src, ExeOutputAppBundle)
 	if err == nil || !strings.Contains(err.Error(), "laf/CMakeLists.txt") {
 		t.Errorf("err = %v, want missing laf/CMakeLists.txt", err)
 	}
 }
 
 func TestInspectNonDarwinIgnoresPlist(t *testing.T) {
-	// wantsAppBundle=false models platforms without a bundle output
-	// contract (Linux/Windows today).
+	// The Windows output config models platforms without a bundle
+	// output contract (Windows today; Linux later). The plist is not
+	// part of that contract.
 	src := fixtureSource(t, func(files map[string]string) {
 		delete(files, "src/main/osx/Info.plist")
+		files["src/CMakeLists.txt"] = windowsExeDataCmake
 	})
-	c, err := NewInspector().Inspect(src, false)
+	c, err := NewInspector().Inspect(src, ExeOutputWindows)
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
@@ -116,7 +134,7 @@ func TestInspectCMakeVersionUndiscoverable(t *testing.T) {
 	src := fixtureSource(t, func(files map[string]string) {
 		files["CMakeLists.txt"] = "project(aseprite C CXX)\n"
 	})
-	_, err := NewInspector().Inspect(src, true)
+	_, err := NewInspector().Inspect(src, ExeOutputAppBundle)
 	if err == nil || !strings.Contains(err.Error(), "CMake version") {
 		t.Errorf("err = %v", err)
 	}
@@ -126,7 +144,7 @@ func TestInspectMissingProject(t *testing.T) {
 	src := fixtureSource(t, func(files map[string]string) {
 		files["CMakeLists.txt"] = "cmake_minimum_required(VERSION 3.20)\n"
 	})
-	_, err := NewInspector().Inspect(src, true)
+	_, err := NewInspector().Inspect(src, ExeOutputAppBundle)
 	if err == nil || !strings.Contains(err.Error(), "project(aseprite") {
 		t.Errorf("err = %v", err)
 	}
@@ -229,6 +247,140 @@ func TestDiscoverSkiaRequirementScriptFailure(t *testing.T) {
 	_, err := DiscoverSkiaRequirement(context.Background(), r, src, SkiaPlatform{Name: "macos", CPU: "arm64"})
 	if err == nil {
 		t.Fatal("script failure must propagate")
+	}
+}
+
+// windowsExeDataCmake mirrors the real src/CMakeLists.txt Windows
+// output contract shape (add_executable + bin/data copy target).
+const windowsExeDataCmake = "add_executable(aseprite ${BUNDLE_PARAM}\n" +
+	"set(ORIGINAL_DATA_OUTPUT_DIR ${CMAKE_BINARY_DIR}/bin/data)\n"
+
+func TestInspectWindowsContract(t *testing.T) {
+	src := fixtureSource(t, func(files map[string]string) {
+		files["src/CMakeLists.txt"] = windowsExeDataCmake
+	})
+	c, err := NewInspector().Inspect(src, ExeOutputWindows)
+	if err != nil {
+		t.Fatalf("Inspect windows: %v", err)
+	}
+	if c.OS != "windows" {
+		t.Errorf("OS = %q, want windows", c.OS)
+	}
+	if c.BundleOutput != "" {
+		t.Errorf("BundleOutput = %q, want empty for the exe contract", c.BundleOutput)
+	}
+	if c.Level != 2 {
+		t.Errorf("Level = %d, want 2", c.Level)
+	}
+	if c.CMakeMinVersion.String() != "3.20" || c.SkiaTag != "m124-08a5439a6b" {
+		t.Errorf("contract = %+v", c)
+	}
+	if !strings.Contains(c.ContractFingerprint(), "os=windows") {
+		t.Errorf("fingerprint = %q", c.ContractFingerprint())
+	}
+}
+
+func TestInspectWindowsMissingEntryPoints(t *testing.T) {
+	for _, gone := range []string{"build.cmd", "build.ps1"} {
+		src := fixtureSource(t, func(files map[string]string) {
+			files["src/CMakeLists.txt"] = windowsExeDataCmake
+			delete(files, gone)
+		})
+		_, err := NewInspector().Inspect(src, ExeOutputWindows)
+		if err == nil || !strings.Contains(err.Error(), gone) {
+			t.Errorf("missing %s must fail inspection; err = %v", gone, err)
+		}
+	}
+}
+
+func TestInspectWindowsMutatedOutputContract(t *testing.T) {
+	// Upstream drops the exe/bin-data markers: fail safely.
+	src := fixtureSource(t, func(files map[string]string) {
+		files["src/CMakeLists.txt"] = "# no output rules anymore\n"
+	})
+	_, err := NewInspector().Inspect(src, ExeOutputWindows)
+	var unknown UnknownContractError
+	if err == nil || !strings.Contains(err.Error(), "Windows exe + bin/data") {
+		t.Fatalf("err = %v, want the windows output-contract failure", err)
+	}
+	if !errorsAs(err, &unknown) {
+		t.Errorf("err type = %T, want UnknownContractError", err)
+	}
+}
+
+func TestInspectWindowsUndiscoverableCMakeVersion(t *testing.T) {
+	src := fixtureSource(t, func(files map[string]string) {
+		files["CMakeLists.txt"] = "project(aseprite C CXX)\n"
+		files["src/CMakeLists.txt"] = windowsExeDataCmake
+	})
+	_, err := NewInspector().Inspect(src, ExeOutputWindows)
+	if err == nil || !strings.Contains(err.Error(), "CMake version") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestExeOutputConfigOS(t *testing.T) {
+	if got := ExeOutputAppBundle.OS(); got != "darwin" {
+		t.Errorf("bundle OS = %q", got)
+	}
+	if got := ExeOutputWindows.OS(); got != "windows" {
+		t.Errorf("windows OS = %q", got)
+	}
+}
+
+func TestDiscoverSkiaRequirementBashFree(t *testing.T) {
+	src := fixtureSource(t)
+	req, err := DiscoverSkiaRequirementBashFree(src, SkiaPlatform{Name: "windows", CPU: "x64"})
+	if err != nil {
+		t.Fatalf("DiscoverSkiaRequirementBashFree: %v", err)
+	}
+	want := "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
+	if req.URL != want {
+		t.Errorf("URL = %q, want %q", req.URL, want)
+	}
+	if req.Tag != "m124-08a5439a6b" || req.DirName != "skia-m124" || req.CPU != "x64" {
+		t.Errorf("req = %+v", req)
+	}
+}
+
+func TestDiscoverSkiaRequirementBashFreeMacShape(t *testing.T) {
+	// The parser handles the macOS shape too (used nowhere today, but
+	// it must not silently diverge from the script's actual lines).
+	src := fixtureSource(t)
+	req, err := DiscoverSkiaRequirementBashFree(src, SkiaPlatform{Name: "macos", CPU: "arm64"})
+	if err != nil {
+		t.Fatalf("macos shape: %v", err)
+	}
+	want := "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-arm64.zip"
+	if req.URL != want {
+		t.Errorf("URL = %q, want %q", req.URL, want)
+	}
+}
+
+func TestDiscoverSkiaRequirementBashFreeMutatedScript(t *testing.T) {
+	for name, mutate := range map[string]func(files map[string]string){
+		"no URL template": func(files map[string]string) {
+			files["laf/misc/skia-url.sh"] = "#!/bin/sh\necho https://example.invalid/$tag\n"
+		},
+		"no asset name": func(files map[string]string) {
+			files["laf/misc/skia-url.sh"] = strings.Replace(
+				files["laf/misc/skia-url.sh"],
+				"skia_file=Skia-Windows-$skia_build-$cpu.zip",
+				"skia_file=changed-$something.zip", 1)
+		},
+	} {
+		src := fixtureSource(t, func(files map[string]string) { mutate(files) })
+		_, err := DiscoverSkiaRequirementBashFree(src, SkiaPlatform{Name: "windows", CPU: "x64"})
+		if err == nil {
+			t.Errorf("%s must fail safely", name)
+		}
+	}
+}
+
+func TestDiscoverSkiaRequirementBashFreeUnknownPlatform(t *testing.T) {
+	src := fixtureSource(t)
+	if _, err := DiscoverSkiaRequirementBashFree(src, SkiaPlatform{Name: "plan9", CPU: "x64"}); err == nil {
+		t.Error("unknown platform must fail")
 	}
 }
 

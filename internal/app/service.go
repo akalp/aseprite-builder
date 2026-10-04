@@ -331,6 +331,13 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 	if err := s.opts.Platform.Prepare(ctx); err != nil {
 		return result, fmt.Errorf("platform prepare: %w", err)
 	}
+	// Platforms that manage their own toolchain environment (Windows:
+	// the VS environment captured from vcvars64.bat) are consulted via
+	// the optional interface; detection failures abort before build.
+	buildEnv, err := s.captureBuildEnvironment(ctx, log)
+	if err != nil {
+		return result, err
+	}
 	cpu := skiaCPUFor(info.Arch)
 	buildOut, err := builder.Build(ctx, aseprite.BuildRequest{
 		SourceDir:    provisioned.SourceDir,
@@ -338,11 +345,15 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 		SkiaDir:      buildPlan.skiaDir,
 		CPU:          cpu,
 		ExtraBinDirs: buildPlan.extraBinDirs(),
+		Env:          buildEnv,
 	})
 	if err != nil {
 		return result, err
 	}
 	log.Line("build produced %s", buildOut.AppPath)
+	if buildOut.AppPath == "" {
+		log.Line("build produced executable %s (data at %s)", buildOut.Executable, buildOut.DataDir)
+	}
 
 	// 10. Verify ------------------------------------------------------------
 	sink.emit(ProgressEvent{Stage: StageVerify, Message: "Verifying the compiled executable"})
@@ -352,7 +363,7 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 	log.Line("verification succeeded")
 
 	// 11. Install (transactional) -------------------------------------------
-	sink.emit(ProgressEvent{Stage: StageInstall, Message: "Installing Aseprite.app"})
+	sink.emit(ProgressEvent{Stage: StageInstall, Message: "Installing Aseprite"})
 	if installer, ok := s.opts.Platform.(interface {
 		SetAllowReplaceUnowned(bool)
 	}); ok {
@@ -362,6 +373,7 @@ func (s *Service) runPipeline(ctx context.Context, opts InstallOptions, sink Pro
 		Version:    result.Version,
 		AppPath:    buildOut.AppPath,
 		Executable: buildOut.Executable,
+		BinDir:     buildOut.BinDir,
 		DataDir:    buildOut.DataDir,
 		IconsDir:   buildOut.IconsDir,
 	})
@@ -510,7 +522,7 @@ func (s *Service) provisionSource(ctx context.Context, rel aseprite.Release, sin
 
 	sink.emit(ProgressEvent{Stage: StageInspectContract, Message: "Inspecting upstream build contract"})
 	inspector := aseprite.NewInspector()
-	contract, err := inspector.Inspect(sourceDir, s.wantsAppBundle())
+	contract, err := inspector.Inspect(sourceDir, s.wantsOutputConfig())
 	if err != nil {
 		return provisionResult{}, UnknownContractError{Reason: err}
 	}
@@ -544,12 +556,44 @@ func shortestDigest(s string) string {
 	return s
 }
 
-// wantsAppBundle reports whether the platform produces a .app bundle
-// (macOS contract). Bundling is part of the discovered contract only
-// on Systems that consume it.
-func (s *Service) wantsAppBundle() bool {
-	return s.opts.Platform.DefaultInstallPath() != "" &&
-		strings.HasSuffix(s.opts.Platform.DefaultInstallPath(), ".app")
+// skiaResolutionNeedsBashFree reports whether the platform cannot run
+// the upstream bash resolver (Windows; stock Linux/macOS can).
+func (s *Service) skiaResolutionNeedsBashFree(osName string) bool {
+	return osName == "windows"
+}
+
+// BuildEnvironmentProvider is implemented by platforms that must
+// assemble a toolchain environment before a build runs (Windows: the
+// Visual Studio environment from vcvars64.bat).
+type BuildEnvironmentProvider interface {
+	BuildEnvironment(ctx context.Context) ([]string, error)
+}
+
+// captureBuildEnvironment returns the platform's build environment;
+// plain environments yield nil without consulting the platform.
+func (s *Service) captureBuildEnvironment(ctx context.Context, log *logging.Logger) ([]string, error) {
+	provider, ok := s.opts.Platform.(BuildEnvironmentProvider)
+	if !ok {
+		return nil, nil
+	}
+	env, err := provider.BuildEnvironment(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("platform build environment: %w", err)
+	}
+	log.Line("platform build environment captured (%d entries)", len(env))
+	return env, nil
+}
+
+// wantsOutputConfig selects which upstream output contract the
+// running platform consumes: the macOS .app bundle or the Windows
+// exe + bin/data layout. Bundling is part of the discovered contract
+// only on systems that consume it.
+func (s *Service) wantsOutputConfig() aseprite.ExeOutputConfig {
+	path := s.opts.Platform.DefaultInstallPath()
+	if path != "" && strings.HasSuffix(path, ".app") {
+		return aseprite.ExeOutputAppBundle
+	}
+	return aseprite.ExeOutputWindows
 }
 
 // extractSourceArchive extracts the source zip into sourceDir,
@@ -565,9 +609,11 @@ func extractSourceArchive(archivePath, sourceDir string) error {
 
 // buildPlan holds resolved inputs for the build stage.
 type buildPlan struct {
-	cmake   dependencies.Tool
-	ninja   dependencies.Tool
-	skiaDir string
+	cmake    dependencies.Tool
+	ninja    dependencies.Tool
+	skiaDir  string
+	binDirs  []string
+	buildEnv []string
 }
 
 func (p buildPlan) extraBinDirs() []string {
@@ -595,20 +641,28 @@ func (s *Service) resolveBuildInputs(ctx context.Context, provisioned provisionR
 	var plan buildPlan
 
 	minCMake := provisioned.Contract.CMakeMinVersion
+	// Download flow selection: the Windows fetchers resolve the
+	// Windows distributions (cmake-windows-x86_64.zip, ninja-win.zip).
+	var cmakeFetcher dependencies.Fetcher = dependencies.CMakeFetcher{
+		Layout: s.opts.Layout,
+		Client: s.upstreamClient(),
+		Log:    log.Line,
+	}
+	var ninjaFetcher dependencies.Fetcher = dependencies.NinjaFetcher{
+		Layout: s.opts.Layout,
+		Client: s.upstreamClient(),
+		Log:    log.Line,
+	}
+	if info.OS == "windows" {
+		cmakeFetcher = dependencies.NewWindowsCMakeFetcher(s.opts.Layout, s.upstreamClient())
+		ninjaFetcher = dependencies.NewWindowsNinjaFetcher(s.opts.Layout, s.upstreamClient())
+	}
 	resolver := &dependencies.Resolver{
 		Runner: s.opts.Runner,
 		Layout: s.opts.Layout,
 		Fetchers: map[string]dependencies.Fetcher{
-			"cmake": dependencies.CMakeFetcher{
-				Layout: s.opts.Layout,
-				Client: s.upstreamClient(),
-				Log:    log.Line,
-			},
-			"ninja": dependencies.NinjaFetcher{
-				Layout: s.opts.Layout,
-				Client: s.upstreamClient(),
-				Log:    log.Line,
-			},
+			"cmake": cmakeFetcher,
+			"ninja": ninjaFetcher,
 		},
 		MinVersions: map[string]version.Version{
 			"cmake": minCMake,
@@ -633,10 +687,18 @@ func (s *Service) resolveBuildInputs(ctx context.Context, provisioned provisionR
 	log.Line("tool resolved: %s", ninja)
 
 	sink.emit(ProgressEvent{Stage: StageResolveSkia, Message: "Discovering Skia requirement from upstream data"})
-	req, err := aseprite.DiscoverSkiaRequirement(ctx, s.opts.Runner, provisioned.SourceDir, aseprite.SkiaPlatform{
+	plat := aseprite.SkiaPlatform{
 		Name: skiaOSName(info.OS),
 		CPU:  skiaCPUFor(info.Arch),
-	})
+	}
+	var req aseprite.SkiaRequirement
+	if s.skiaResolutionNeedsBashFree(info.OS) {
+		// Windows: laf/misc/skia-url.sh is bash; derive the URL from
+		// the script's own template instead of executing it.
+		req, err = aseprite.DiscoverSkiaRequirementBashFree(provisioned.SourceDir, plat)
+	} else {
+		req, err = aseprite.DiscoverSkiaRequirement(ctx, s.opts.Runner, provisioned.SourceDir, plat)
+	}
 	if err != nil {
 		return plan, fmt.Errorf("discover Skia requirement: %w", err)
 	}

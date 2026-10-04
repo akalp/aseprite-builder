@@ -19,6 +19,22 @@ import (
 // crash.
 var ErrUnsupportedPlatform = errors.New("this operating system is not supported yet by aseprite-builder")
 
+// selectorConstructor builds the concrete Platform implementation for
+// one OS.
+type selectorConstructor func(builderVersion string) (platform.Platform, error)
+
+// selectors maps a canonical OS name to its constructor. It is
+// populated by init() in the per-host selector files
+// (selector_darwin.go on darwin, selector_windows.go on windows). Each
+// file is GOOS-gated, so a host only ever registers its own platform:
+// other hosts' constructor files do not compile here.
+var selectors = map[string]selectorConstructor{}
+
+// registerSelector is called from per-host init() functions.
+func registerSelector(canonicalOS string, c selectorConstructor) {
+	selectors[canonicalOS] = c
+}
+
 // NewForRunningSystem returns the concrete Platform implementation for
 // runtime.GOOS.
 func NewForRunningSystem(builderVersion string) (platform.Platform, error) {
@@ -26,11 +42,12 @@ func NewForRunningSystem(builderVersion string) (platform.Platform, error) {
 }
 
 // NewForOS returns the concrete Platform for a canonical OS name.
+// Unknown names yield ErrUnsupportedPlatform, which the frontends map
+// to a friendly message.
 func NewForOS(canonicalOS, builderVersion string) (platform.Platform, error) {
-	switch canonicalOS {
-	case "darwin":
-		return newDarwinPlatform(builderVersion)
-	default:
+	c, ok := selectors[canonicalOS]
+	if !ok {
 		return nil, ErrUnsupportedPlatform
 	}
+	return c(builderVersion)
 }

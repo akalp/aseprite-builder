@@ -12,21 +12,22 @@ import (
 )
 
 // VerifyBuild confirms that a completed build produced a runnable
-// macOS application bundle matching the requested release:
+// artifact matching the requested release:
 //
-//   - the bundle and its executable exist,
-//   - the runtime data directory is populated (upstream's copy_data
-//     target must have run),
+//   - macOS: the bundle and its executable exist,
+//   - all layouts: the runtime data directory is populated (upstream's
+//     copy_data target must have run),
 //   - the executable reports the expected version (aseprite --version).
 //
 // Verification failures are fatal for install: the builder never
 // replaces a working installation with an unverified artifact.
 func VerifyBuild(ctx context.Context, r runner.Runner, out BuildOutput, wantVersion string) error {
-	if out.AppPath == "" {
-		return fmt.Errorf("verify: no application bundle in build output")
-	}
-	if fi, err := os.Stat(out.AppPath); err != nil || !fi.IsDir() {
-		return fmt.Errorf("verify: bundle %s is missing: %w", out.AppPath, err)
+	if out.AppPath != "" {
+		if fi, err := os.Stat(out.AppPath); err != nil || !fi.IsDir() {
+			return fmt.Errorf("verify: bundle %s is missing: %w", out.AppPath, err)
+		}
+	} else if out.Executable == "" {
+		return fmt.Errorf("verify: no application bundle or executable in build output")
 	}
 	if fi, err := os.Stat(out.Executable); err != nil || fi.IsDir() {
 		return fmt.Errorf("verify: executable %s is missing: %w", out.Executable, err)
@@ -37,11 +38,13 @@ func VerifyBuild(ctx context.Context, r runner.Runner, out BuildOutput, wantVers
 			Reason: fmt.Sprintf("runtime data dir %s is empty; the upstream data copy step did not run", out.DataDir),
 		}
 	}
-	return verifyExecVersion(ctx, r, out.Executable, wantVersion)
+	return VerifyExecutable(ctx, r, out.Executable, wantVersion)
 }
 
-// VerifyInstalled runs the same executable-version check against an
-// installed bundle. Used post-install and by repair/doctor.
+// VerifyInstalled checks the installed macOS bundle: the executable
+// exists at Contents/MacOS/aseprite and reports the expected version.
+// Platforms installed as plain directories use VerifyExecutable with
+// the platform-resolved executable path instead.
 func VerifyInstalled(ctx context.Context, r runner.Runner, appPath, wantVersion string) error {
 	if appPath == "" {
 		return fmt.Errorf("verify: no installation to verify")
@@ -53,7 +56,16 @@ func VerifyInstalled(ctx context.Context, r runner.Runner, appPath, wantVersion 
 	if fi, err := os.Stat(exe); err != nil || fi.IsDir() {
 		return fmt.Errorf("verify: installed bundle %s has no executable at %s", appPath, exe)
 	}
-	return verifyExecVersion(ctx, r, exe, wantVersion)
+	return VerifyExecutable(ctx, r, exe, wantVersion)
+}
+
+// VerifyExecutable checks that an executable (built or installed)
+// exists and reports the expected version.
+func VerifyExecutable(ctx context.Context, r runner.Runner, executable, wantVersion string) error {
+	if executable == "" {
+		return fmt.Errorf("verify: no executable to check")
+	}
+	return verifyExecVersion(ctx, r, executable, wantVersion)
 }
 
 func verifyExecVersion(ctx context.Context, r runner.Runner, executable, wantVersion string) error {
@@ -61,7 +73,8 @@ func verifyExecVersion(ctx context.Context, r runner.Runner, executable, wantVer
 	defer cancel()
 
 	// HOME is redirected to a throwaway dir so any first-run writes go
-	// to a sandbox instead of the user's real Application Support.
+	// to a sandbox instead of the user's real profile (APPDATA is the
+	// Windows equivalent and redirects the same way).
 	sandbox, err := os.MkdirTemp("", "aseprite-builder-verify-")
 	if err != nil {
 		return fmt.Errorf("create verification sandbox: %w", err)
@@ -71,7 +84,7 @@ func verifyExecVersion(ctx context.Context, r runner.Runner, executable, wantVer
 	res, err := r.Run(ctx, runner.Command{
 		Name: executable,
 		Args: []string{"--version"},
-		Env:  []string{"HOME=" + sandbox},
+		Env:  []string{"HOME=" + sandbox, "APPDATA=" + sandbox},
 	})
 	if err != nil {
 		return fmt.Errorf("verify: running %s --version: %w", filepath.Base(executable), err)

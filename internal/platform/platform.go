@@ -39,12 +39,17 @@ type Check struct {
 
 // BuildOutput is the artifact a completed build hands to the platform
 // installer. On macOS the build produces a .app bundle; other platforms
-// populate Executable/Data instead.
+// populate Executable/BinDir/Data instead.
 type BuildOutput struct {
 	Version    string // Aseprite version string, e.g. "1.3.18.6"
 	AppPath    string // macOS: path to Aseprite.app produced by the build
 	Executable string // plain executable path (non-macOS or bundle exec)
-	DataDir    string // runtime data dir to install alongside, when applicable
+	// BinDir is the directory holding the executable plus everything
+	// needed to run it (data dir, DLLs). Non-bundle installers
+	// activate this directory as the payload. Empty for bundle
+	// layouts. DataDir is the runtime data directory it contains.
+	BinDir  string
+	DataDir string
 	// IconsDir is the upstream source's icon set directory
 	// (<source>/data/icons on macOS), used to generate the native .icns
 	// bundle icons. Empty when unavailable.
@@ -98,6 +103,16 @@ type Platform interface {
 	DefaultInstallPath() string
 }
 
+// InstalledExecutableProvider is an optional Platform capability for
+// layouts that are not a macOS bundle (a plain installation
+// directory): the absolute path of the installed executable, so the
+// service layer can verify/repair installations without knowing the
+// per-OS shape. Implementations may return the path even when the
+// executable is currently missing — callers stat it.
+type InstalledExecutableProvider interface {
+	InstalledExecutable() (string, error)
+}
+
 // CurrentArch maps runtime architecture to the builder's canonical
 // naming (amd64 → amd64 etc.). Only a convenience for Detect
 // implementations.
@@ -111,7 +126,8 @@ func CanonicalOS() string { return runtime.GOOS }
 // runtime guess.
 func SupportedTargets() map[string][]string {
 	return map[string][]string{
-		"darwin": {"arm64", "amd64"},
+		"darwin":  {"arm64", "amd64"},
+		"windows": {"amd64"},
 	}
 }
 

@@ -3,7 +3,9 @@
 ## Requirements
 
 - Go 1.24+
-- macOS (the first vertical slice is macOS arm64/amd64)
+- macOS is the primary development host (the first vertical slice is
+  macOS arm64/amd64; Windows x64 is implemented and cross-verified
+  from macOS via the Go cross-build).
 
 ## Common commands
 
@@ -12,6 +14,11 @@ go build ./...              # compile everything
 go test ./...               # full unit test suite
 go vet ./...                # static checks
 gofmt -l .                  # formatting check (should print nothing)
+
+# Windows (cross-check from macOS/ci): builds, vets and compiles the
+# windows-tagged tests without executing them.
+GOOS=windows GOARCH=amd64 go build ./...
+GOOS=windows GOARCH=amd64 go vet ./...
 
 go run ./cmd/aseprite-builder help
 go run ./cmd/aseprite-builder doctor --json

@@ -136,10 +136,17 @@ func ProbeCachedTool(ctx context.Context, r runner.Runner, name, path string) (v
 // ToolBinaryLocators map a tool name to the relative locations its
 // distribution layouts use inside an extracted artifact. CMake's macOS
 // distribution nests the binary inside CMake.app; Ninja ships it at the
-// extraction root.
+// extraction root. The .exe entries cover the Windows distributions
+// (cmake-…-windows-x86_64.zip ships bin\cmake.exe; ninja-win.zip ships
+// ninja.exe).
 var toolBinaryLocators = map[string][]string{
-	"cmake": {filepath.Join("CMake.app", "Contents", "bin", "cmake")},
-	"ninja": {"ninja"},
+	"cmake": {
+		filepath.Join("CMake.app", "Contents", "bin", "cmake"),     // macOS dist
+		filepath.Join("bin", "cmake.exe"),                          // windows dist
+		filepath.Join("CMake.app", "Contents", "bin", "cmake.exe"), // defensive
+		"cmake.exe", // defensive
+	},
+	"ninja": {"ninja", "ninja.exe"},
 }
 
 // LocateToolBinary searches an extracted tool distribution for the
@@ -163,7 +170,19 @@ var ninjaVersionTagRe = regexp.MustCompile(`^v(\d+\.\d+\.\d+)$`)
 
 func isExecutableFile(path string) bool {
 	fi, err := os.Stat(path)
-	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+	if err != nil || fi.IsDir() {
+		return false
+	}
+	// On Windows the exec bit does not exist and is meaningless; on
+	// Unix we check it. A path may also be probed on Unix tests for a
+	// windows-shaped fixture with a .exe name — trust the exec bit
+	// there too.
+	if strings.EqualFold(filepath.Ext(path), ".exe") {
+		// Windows binaries: presence is authority enough when checked
+		// from a Unix host; the exec bit cannot be set by zip extract.
+		return fi.Size() > 0
+	}
+	return fi.Mode()&0o111 != 0
 }
 
 // shallowLocate performs a bounded search (max depth 4) for a single

@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -274,7 +277,7 @@ func TestInstallHappyPath(t *testing.T) {
 	if st.AsepriteVersion != "1.3.18.6" || st.SkiaTag != "m124-08a5439a6b" {
 		t.Errorf("state = %+v", st)
 	}
-	if !strings.Contains(st.BuildContract, "level=1") {
+	if !strings.Contains(st.BuildContract, "level=2") {
 		t.Errorf("BuildContract = %q", st.BuildContract)
 	}
 }
@@ -314,6 +317,308 @@ type failReqPlatform struct{ fakePlatform }
 
 func (failReqPlatform) Requirements(context.Context) ([]platform.Check, error) {
 	return []platform.Check{{Name: "Xcode", OK: false, Fix: "xcode-select --install"}}, nil
+}
+
+// winFakePlatform models the Windows platform surface the service
+// pipeline consumes: non-bundle install path, the VS build environment
+// capability and the installed-executable capability.
+type winFakePlatform struct {
+	installPath string
+	capturedEnv []string
+	installed   string
+}
+
+func (f *winFakePlatform) Detect(context.Context) (platform.SystemInfo, error) {
+	return platform.SystemInfo{OS: "windows", OSVersion: "10.0.26100", Arch: "amd64", Supported: true}, nil
+}
+
+func (f *winFakePlatform) Requirements(context.Context) ([]platform.Check, error) {
+	return []platform.Check{{Name: "Visual Studio Build Tools", OK: true, Detail: "fake"}}, nil
+}
+
+func (f *winFakePlatform) Prepare(context.Context) error { return nil }
+
+// BuildEnvironment implements app.BuildEnvironmentProvider: the
+// captured MSVC environment the service must pass into the build.
+func (f *winFakePlatform) BuildEnvironment(context.Context) ([]string, error) {
+	f.capturedEnv = []string{
+		"PATH=C:\\VS\\Common7\\IDE\\VC\\Tools\\MSVC\\14.44\\bin\\HostX64\\x64;C:\\Windows",
+		"LIB=C:\\VS\\VC\\Tools\\MSVC\\14.44\\lib\\x64",
+		"INCLUDE=C:\\VS\\VC\\Tools\\MSVC\\14.44\\include",
+	}
+	return f.capturedEnv, nil
+}
+
+func (f *winFakePlatform) Install(_ context.Context, out platform.BuildOutput) (platform.InstallOutcome, error) {
+	f.installed = out.Version
+	if out.BinDir == "" {
+		return platform.InstallOutcome{}, errors.New("windows install needs BinDir")
+	}
+	return platform.InstallOutcome{AppPath: f.installPath, PreviousPath: ""}, nil
+}
+
+func (f *winFakePlatform) Launch(context.Context) error                               { return nil }
+func (f *winFakePlatform) Uninstall(context.Context, platform.UninstallOptions) error { return nil }
+func (f *winFakePlatform) InstalledVersion(context.Context) (string, error)           { return f.installed, nil }
+func (f *winFakePlatform) DefaultInstallPath() string                                 { return f.installPath }
+
+// InstalledExecutable implements platform.InstalledExecutableProvider.
+func (f *winFakePlatform) InstalledExecutable() (string, error) {
+	return filepath.Join(f.installPath, "aseprite.exe"), nil
+}
+
+func (f *winFakePlatform) SetAllowReplaceUnowned(bool) {}
+
+// windowsSourceZip composes the official-source-shaped zip with the
+// Windows contract markers (build.cmd/build.ps1, exe/data cmake files,
+// and a real-shaped skia-url.sh for the bash-free discovery).
+func windowsSourceZip(t *testing.T) []byte {
+	t.Helper()
+	urlSh := "#!/usr/bin/env bash\n" +
+		"if [ $is_win ] ; then\n" +
+		"    skia_file=Skia-Windows-$skia_build-$cpu.zip\n" +
+		"elif [ $is_macos ] ; then\n" +
+		"    skia_file=Skia-macOS-$skia_build-$cpu.zip\n" +
+		"else\n" +
+		"    skia_file=Skia-Linux-$skia_build-$cpu.zip\n" +
+		"fi\n" +
+		"echo https://github.com/aseprite/skia/releases/download/$skia_tag/$skia_file\n"
+	files := map[string]string{
+		"EULA.txt":                "license",
+		".gitmodules":             "[submodule \"laf\"]",
+		"build.sh":                "#!/usr/bin/env bash",
+		"build.cmd":               "@echo off\r\n",
+		"build.ps1":               "# windows wrapper\r\n",
+		"CMakeLists.txt":          "cmake_minimum_required(VERSION 3.20)\nproject(aseprite C CXX)\n",
+		"laf/CMakeLists.txt":      "# laf",
+		"laf/clip/CMakeLists.txt": "# clip",
+		"laf/misc/platform.sh":    "# platform",
+		"laf/misc/skia-tag.txt":   "m124-08a5439a6b\n",
+		"laf/misc/skia-url.sh":    urlSh,
+		"src/CMakeLists.txt":      "add_executable(aseprite ${BUNDLE_PARAM})\nset(ORIGINAL_DATA_OUTPUT_DIR ${CMAKE_BINARY_DIR}/bin/data)\n",
+	}
+	return buildZipBytes(t, files)
+}
+
+// wireBuildFake_windows answers the two cmake invocations, the tool
+// version probes and the produced exe's --version. The build step
+// materializes the bin payload (aseprite.exe + data) the upstream
+// Windows build would produce.
+func wireBuildFake_windows(version string) func(runner.Command) (runner.Result, bool) {
+	return func(c runner.Command) (runner.Result, bool) {
+		if c.Name == "cmake" && len(c.Args) > 0 {
+			switch c.Args[0] {
+			case "-B":
+				return runner.Result{ExitCode: 0}, true
+			case "--build":
+				srcDir := filepath.Dir(c.Args[1]) // argument: <src>/build
+				bin := filepath.Join(srcDir, "build", "bin")
+				if err := os.MkdirAll(filepath.Join(bin, "data"), 0o755); err != nil {
+					return runner.Result{}, false
+				}
+				if err := os.WriteFile(filepath.Join(bin, "aseprite.exe"), []byte("PE"), 0o755); err != nil {
+					return runner.Result{}, false
+				}
+				if err := os.WriteFile(filepath.Join(bin, "data", "skin.zip"), []byte("data"), 0o644); err != nil {
+					return runner.Result{}, false
+				}
+				return runner.Result{ExitCode: 0}, true
+			}
+		}
+		if len(c.Args) == 1 && c.Args[0] == "--version" {
+			switch filepath.Base(c.Name) {
+			case "cmake":
+				return runner.Result{Stdout: "cmake version 3.31.6\n"}, true
+			case "ninja", "ninja.exe":
+				return runner.Result{Stdout: "1.13.1\n"}, true
+			}
+			if strings.HasSuffix(c.Name, "aseprite.exe") {
+				return runner.Result{Stdout: "Aseprite v" + version + "\n"}, true
+			}
+		}
+		return runner.Result{}, false
+	}
+}
+
+// releaseListJSON encodes a GitHub-shaped releases payload.
+func releaseListJSON(t *testing.T, tag string, assets []map[string]string) []byte {
+	t.Helper()
+	type asset struct {
+		Name               string `json:"name"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	}
+	type rel struct {
+		TagName    string  `json:"tag_name"`
+		Draft      bool    `json:"draft"`
+		PreRelease bool    `json:"prerelease"`
+		Assets     []asset `json:"assets"`
+	}
+	out := []rel{}
+	if tag != "" {
+		r := rel{TagName: tag}
+		for _, a := range assets {
+			r.Assets = append(r.Assets, asset{Name: a["name"], BrowserDownloadURL: a["browser_download_url"]})
+		}
+		out = append(out, r)
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// binContents picks the canned archive for the download path.
+func binContents(urlPath string, sourceZip, skiaZip, cmakeZip, ninjaZip []byte) []byte {
+	switch path.Base(urlPath) {
+	case "Skia-Windows-Release-x64.zip":
+		return skiaZip
+	case "cmake-4.1.2-windows-x86_64.zip":
+		return cmakeZip
+	case "ninja-win.zip":
+		return ninjaZip
+	default:
+		return sourceZip
+	}
+}
+
+func TestInstallWindowsShape(t *testing.T) {
+	layout := mustLayout(t)
+	plat := &winFakePlatform{installPath: `C:\Users\u\AppData\Local\Programs\Aseprite`}
+	fk := &runner.FakeRunner{}
+	fk.Match = wireBuildFake_windows("1.3.18.6")
+
+	// upstreamSrv fakes both the GitHub-shaped API and the binary
+	// downloads (CMake/Ninja/Skia) on one server.
+	sourceZip := windowsSourceZip(t)
+	skiaZip := buildZipBytes(t, map[string]string{
+		"Skia-Windows-Release-x64/out/Release-x64/skia.lib":                        "LIB",
+		"Skia-Windows-Release-x64/third_party/externals/libwebp/src/webp/decode.h": "w",
+	})
+	cmakeZip := buildZipBytes(t, map[string]string{
+		"cmake-4.1.2-windows-x86_64/bin/cmake.exe": "PE",
+	})
+	ninjaZip := buildZipBytes(t, map[string]string{"ninja.exe": "PE"})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/repos/"):
+			w.Header().Set("Content-Type", "application/json")
+			host := "http://" + r.Host
+			assetOf := func(name string) []map[string]string {
+				return []map[string]string{
+					{"name": name, "browser_download_url": host + "/" + name},
+				}
+			}
+			var out []byte
+			switch {
+			case strings.Contains(r.URL.Path, "Kitware/CMake"):
+				out = releaseListJSON(t, "v4.1.2", assetOf("cmake-4.1.2-windows-x86_64.zip"))
+			case strings.Contains(r.URL.Path, "ninja-build/ninja"):
+				out = releaseListJSON(t, "v1.13.1", assetOf("ninja-win.zip"))
+			case strings.Contains(r.URL.Path, "aseprite/skia"):
+				out = releaseListJSON(t, "m124-08a5439a6b", assetOf("Skia-Windows-Release-x64.zip"))
+			default:
+				out = releaseListJSON(t, "", nil)
+			}
+			_, _ = w.Write(out)
+		default:
+			_, _ = w.Write(binContents(r.URL.Path, sourceZip, skiaZip, cmakeZip, ninjaZip))
+		}
+	}))
+	defer srv.Close()
+
+	svc, err := New(Options{
+		BuilderVersion:      "test",
+		Layout:              layout,
+		Platform:            plat,
+		BuildRunnerOverride: fk,
+		Releases: fakeReleases{releases: []aseprite.Release{{
+			Version:   mustVer("1.3.18.6"),
+			TagName:   "v1.3.18.6",
+			SourceURL: "https://upstream.invalid/Aseprite-v1.3.18.6-Source.zip",
+			AssetSize: int64(len(sourceZip)),
+		}}},
+		Upstream: &upstream.Client{BaseURL: srv.URL, UserAgent: "test"},
+		Runner:   fk,
+		Store:    state.Store{Dir: layout.State},
+		fetchHook: func(ctx context.Context, src, dst, sha string, progress func(int64, int64)) error {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(dst, sourceZip, 0o644)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var events []ProgressEvent
+	result, err := svc.Install(context.Background(), InstallOptions{}, func(e ProgressEvent) {
+		events = append(events, e)
+	})
+	if err != nil {
+		t.Fatalf("Install (windows shape): %v", err)
+	}
+
+	// The Windows contract was inspected (os token) and the VS
+	// environment captured and passed into the build.
+	if !strings.Contains(result.Contract, "os=windows") {
+		t.Errorf("Contract = %q, want the windows fingerprint", result.Contract)
+	}
+	if len(plat.capturedEnv) != 3 {
+		t.Fatalf("captured env = %d entries, want the fake's 3", len(plat.capturedEnv))
+	}
+	var sawEnv []string
+	for _, c := range fk.Called() {
+		if c.Name == "cmake" && len(c.Args) > 0 && (c.Args[0] == "-B" || c.Args[0] == "--build") {
+			sawEnv = c.Env
+		}
+	}
+	for _, want := range plat.capturedEnv {
+		if !containsEnv(sawEnv, want) {
+			t.Errorf("build env missing %q (got %q)", want, sawEnv)
+		}
+	}
+	// The configure step passes -DSKIA_LIBRARY_DIR with the x64 release
+	// path amd64 maps to.
+	var configure runner.Command
+	for _, c := range fk.Called() {
+		if c.Name == "cmake" && len(c.Args) > 0 && c.Args[0] == "-B" {
+			configure = c
+			break
+		}
+	}
+	joined := strings.Join(configure.Args, " ")
+	if !strings.Contains(joined, "Release-x64") {
+		t.Errorf("configure args missing Release-x64: %s", joined)
+	}
+	if !strings.Contains(joined, "RelWithDebInfo") {
+		t.Errorf("configure args missing RelWithDebInfo: %s", joined)
+	}
+
+	// Install reached the platform with Version and the state records
+	// the windows contract.
+	if plat.installed != "1.3.18.6" {
+		t.Errorf("platform installed = %q", plat.installed)
+	}
+	st, ok, err := svc.CurrentInstall()
+	if err != nil || !ok {
+		t.Fatalf("CurrentInstall: ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(st.BuildContract, "os=windows") {
+		t.Errorf("state BuildContract = %q", st.BuildContract)
+	}
+}
+
+func containsEnv(env []string, want string) bool {
+	wantKey := strings.SplitN(want, "=", 2)[0]
+	for _, e := range env {
+		if strings.SplitN(e, "=", 2)[0] == wantKey && strings.Contains(e, strings.SplitN(want, "=", 2)[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestInstallUnknownContractFailsSafely(t *testing.T) {
